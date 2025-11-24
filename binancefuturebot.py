@@ -605,51 +605,64 @@ def get_all_orders(symbol="BTCUSDT", start_time=None, limit=100):
 
 def summarize_pnl(entry_price, exit_price, qty, side):
     """Compute and log the profit or loss in USDT and percentage."""
-    if side.upper() == "BUY":
-        pnl = (exit_price - entry_price) * qty
-    else:
-        pnl = (entry_price - exit_price) * qty
+    try:
+        # Ensure all inputs are floats
+        entry_price = float(entry_price)
+        exit_price = float(exit_price)
+        qty = float(qty)
+        side = str(side).upper()
+        
+        if side == "BUY":
+            pnl = (exit_price - entry_price) * qty
+            pct = ((exit_price - entry_price) / entry_price * 100) if entry_price != 0 else 0
+        else:
+            pnl = (entry_price - exit_price) * qty
+            pct = ((entry_price - exit_price) / entry_price * 100) if entry_price != 0 else 0
 
-    pct = ((exit_price - entry_price) / entry_price * 100
-           if side.upper() == "BUY"
-           else (entry_price - exit_price) / entry_price * 100)
+        logging.info(f"📊 Trade Summary:")
+        logging.info(f"    Entry Price: {entry_price:.2f}")
+        logging.info(f"    Exit Price : {exit_price:.2f}")
+        logging.info(f"    Quantity   : {qty}")
+        logging.info(f"    Side       : {side}")
+        logging.info(f"    P&L (USDT) : {pnl:.4f}")
+        logging.info(f"    P&L (%)    : {pct:.2f}%")
+        
+        send_telegram(f"📊 <b>Trade Summary</b>\n"
+                  f"Entry: {entry_price:.2f}\n"
+                  f"Exit: {exit_price:.2f}\n"
+                  f"Qty: {qty}\n"
+                  f"Side: {side}\n"
+                  f"P&L: {pnl:.4f} USDT ({pct:.2f}%)")
 
-    logging.info(f"📊 Trade Summary:")
-    logging.info(f"    Entry Price: {entry_price:.2f}")
-    logging.info(f"    Exit Price : {exit_price:.2f}")
-    logging.info(f"    Quantity   : {qty}")
-    logging.info(f"    Side       : {side}")
-    logging.info(f"    P&L (USDT) : {pnl:.4f}")
-    logging.info(f"    P&L (%)    : {pct:.2f}%")
-    send_telegram(f"📊 <b>Trade Summary</b>\n"
-              f"Entry: {entry_price:.2f}\n"
-              f"Exit: {exit_price:.2f}\n"
-              f"Qty: {qty}\n"
-              f"Side: {side}\n"
-              f"P&L: {pnl:.4f} USDT ({pct:.2f}%)")
-
-
-    return pnl, pct
+        return pnl, pct
+        
+    except Exception as e:
+        logging.error(f"Error in summarize_pnl: {e}")
+        # Return default values to avoid breaking the main loop
+        return 0, 0
 
 
 def execute_trade(symbol="BTCUSDT", qty=0.01):
     TRADE_TS = now_ms()
     logging.info(f"TRADE TIMESTAMP = {TRADE_TS}")
-    trend = get_market_trend(symbol)
-    if not trend:
-        return
-
-    atr, entry_price = calculate_atr(symbol)
-    if not atr or not entry_price:
-        return
-
-    # Widen the stop loss to 3×ATR
-    tp1, tp2, tp3, sl = compute_targets(entry_price, atr, trend)
-    logging.info(f"Adjusted SL = {sl:.2f}")
-
-    side = NewOrderSideEnum["BUY"].value if trend == "BULLISH" else NewOrderSideEnum["SELL"].value
-
+    
     try:
+        trend = get_market_trend(symbol)
+        if not trend:
+            send_telegram(f"❌ <b>Trade Aborted</b>\nSymbol: {symbol}\nReason: Could not determine market trend")
+            return
+
+        atr, entry_price = calculate_atr(symbol)
+        if not atr or not entry_price:
+            send_telegram(f"❌ <b>Trade Aborted</b>\nSymbol: {symbol}\nReason: Could not calculate ATR or entry price")
+            return
+
+        # Widen the stop loss to 3×ATR
+        tp1, tp2, tp3, sl = compute_targets(entry_price, atr, trend)
+        logging.info(f"Adjusted SL = {sl:.2f}")
+
+        side = NewOrderSideEnum["BUY"].value if trend == "BULLISH" else NewOrderSideEnum["SELL"].value
+
         # --- Market Entry ---
         response = client.rest_api.new_order(
             symbol=symbol,
@@ -672,6 +685,7 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
         sl_order = place_stop_loss(symbol, side, qty, sl, TRADE_TS)
         if not sl_order or ("orderId" not in sl_order and "order_id" not in sl_order):
             logging.error(f"Stop loss placement failed or invalid response: {sl_order}")
+            send_telegram(f"❌ <b>Trade Error</b>\nSymbol: {symbol}\nReason: Stop loss placement failed")
             return
 
         # --- Place Take Profits with unique IDs ---
@@ -681,6 +695,7 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
         place_take_profits(symbol, side, qty, entry_price, atr, TRADE_TS, leverage=20)
 
         logging.info("Monitoring active orders for SL updates...")
+        send_telegram(f"🔍 <b>Monitoring Started</b>\nSymbol: {symbol}\nMonitoring TP and SL orders...")
 
         tp1_hit = False
         tp2_hit = False
@@ -706,22 +721,29 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
             # --- Stop Loss Triggered ---
             if sl_filled:
                 logging.warning("🚨 Stop Loss triggered! Cancelling all take-profit orders...")
+                send_telegram(f"🛑 <b>Stop Loss Triggered - Processing</b>\nSymbol: {symbol}\nOrder ID: {sl_order_id}")
+                
                 cancel_all_open_tps(symbol)
                 close_open_position(symbol, side, TRADE_TS)
 
                 # Get exit price from SL order data
                 exit_price = sl
                 if sl_data:
-                    # Try different possible price fields
-                    exit_price = (
-                        sl_data.get("avgPrice") or 
-                        sl_data.get("stopPrice") or 
-                        sl_data.get("price") or 
-                        sl
-                    )
-                    if exit_price == 0 or exit_price is None:  # Fallback if price not available
+                    # Try different possible price fields and ensure they are converted to float
+                    try:
+                        exit_price = float(sl_data.get("avgPrice", 0)) or float(sl_data.get("stopPrice", 0)) or float(sl_data.get("price", 0)) or sl
+                    except (ValueError, TypeError):
                         exit_price = sl
-                        
+                    if exit_price == 0:  # Fallback if price not available
+                        exit_price = sl
+                
+                # Ensure exit_price is float
+                try:
+                    exit_price = float(exit_price)
+                except (ValueError, TypeError):
+                    logging.warning(f"Could not convert exit_price to float, using SL price: {sl}")
+                    exit_price = sl
+                                
                 pnl, pct = summarize_pnl(entry_price, exit_price, qty, side)
                 send_telegram(f"🚨 <b>STOP LOSS Triggered</b>\n"
                             f"Symbol: {symbol}\n"
@@ -741,7 +763,7 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
                         sl_order = new_sl
                         sl_order_id = new_sl.get("order_id") or new_sl.get("orderId")
                         logging.info(f"✅ SL moved to break-even. New SL order ID: {sl_order_id}")
-                        send_telegram(f"🛡️ <b>SL Moved to Break-Even</b>\nSymbol: {symbol}\nNew SL Order ID: {sl_order_id}" )
+                        send_telegram(f"🛡️ <b>SL Moved to Break-Even</b>\nSymbol: {symbol}\nNew SL Order ID: {sl_order_id}")
                 tp1_hit = True
 
             # --- TP2 reached → Move SL to TP1 ---
@@ -754,7 +776,7 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
                         sl_order = new_sl
                         sl_order_id = new_sl.get("order_id") or new_sl.get("orderId")
                         logging.info(f"✅ SL moved to TP1. New SL order ID: {sl_order_id}")
-                        send_telegram(f"🛡️ <b>SL Moved to TP1</b>\nSymbol: {symbol}\nNew SL Order ID: {sl_order_id}" )
+                        send_telegram(f"🛡️ <b>SL Moved to TP1</b>\nSymbol: {symbol}\nNew SL Order ID: {sl_order_id}")
                 tp2_hit = True
 
             # --- TP3 reached → Close position and cancel SL ---
@@ -766,19 +788,18 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
                     try:
                         client.rest_api.cancel_order(symbol=symbol, order_id=sl_order_id)
                         logging.info(f"✅ SL order {sl_order_id} canceled after TP3.")
-                        send_telegram(f"🛑 <b>SL Canceled after TP3</b>\nSymbol: {symbol}\nSL Order ID: {sl_order_id}" )
+                        send_telegram(f"🛑 <b>SL Canceled after TP3</b>\nSymbol: {symbol}\nSL Order ID: {sl_order_id}")
                     except Exception as ce:
                         logging.error(f"⚠️ Error canceling SL after TP3: {ce}")
-                        send_telegram(f"⚠️ <b>Error Canceling SL after TP3</b>\nSymbol: {symbol}\nSL Order ID: {sl_order_id}\nError: {ce}" )
+                        send_telegram(f"⚠️ <b>Error Canceling SL after TP3</b>\nSymbol: {symbol}\nSL Order ID: {sl_order_id}\nError: {ce}")
 
                 close_open_position(symbol, side, TRADE_TS)
                 break
 
     except Exception as e:
         logging.error(f"execute_trade() error: {e}")
-        send_telegram(f"❌ <b>Trade Execution Error</b>\nSymbol: {symbol}\nError: {e}")
-
-
+        send_telegram(f"❌ <b>Trade Execution Error</b>\nSymbol: {symbol}\nError: {str(e)}")
+        
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--loop", action="store_true", help="Enable continuous trade execution")
