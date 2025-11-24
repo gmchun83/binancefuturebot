@@ -13,16 +13,18 @@ Requirement
 - export PYTHONPATH=$PYTHONPATH:$(pwd)/clients/derivatives_trading_usds_futures/src
 
 **Find Binance Common **
-find . -type d -name "binance_common" 
-Expected output (based on Binance’s repo structure): 
-clients/binance_common/src/binance_common 
-export 
+
+- find . -type d -name "binance_common" 
+- Expected output (based on Binance’s repo structure): 
+- clients/binance_common/src/binance_common 
+- export 
 PYTHONPATH=$PYTHONPATH:$(pwd)/common/src:$(pwd)/clients/derivatives_trading_usd
  s_futures/src 
 
 Then go back folder to binance-connector-python
-cd clients/derivatives_trading_usds_futures 
-pip install .
+
+- cd clients/derivatives_trading_usds_futures 
+- pip install .
 
 **Testing**
 python3.11 -c "from binance_sdk_derivatives_trading_usds_futures import derivatives_trading_usds_futures; print('OK')"
