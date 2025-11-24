@@ -28,4 +28,5 @@ Then go back folder to binance-connector-python
 - pip install .
 
 **Testing**
-python3.11 -c "from binance_sdk_derivatives_trading_usds_futures import derivatives_trading_usds_futures; print('OK')"
+
+- python3.11 -c "from binance_sdk_derivatives_trading_usds_futures import derivatives_trading_usds_futures; print('OK')"
