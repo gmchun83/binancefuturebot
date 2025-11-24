@@ -10,12 +10,14 @@ https://developers.binance.com/
 - pip install python-dotenv 
 - pip install numpy
 
-**Install manually to include derivatives usds margined futures libray**
+**Install manually to include derivatives usds margined futures library**
 
 - git clone https://github.com/binance/binance-connector-python.git 
 - cd binance-connector-python 
 - export PYTHONPATH=$PYTHONPATH:$(pwd)/clients/derivatives_trading_usds_futures/src
-Note:pip install binance-connector-python wont include derivatives usds margined futures libray
+- 
+Note:pip install binance-connector-python wont include derivatives usds margined futures library
+
 **Find Binance Common**
 
 - find . -type d -name "binance_common" 
