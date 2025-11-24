@@ -33,3 +33,11 @@ PYTHONPATH=$PYTHONPATH:$(pwd)/common/src:$(pwd)/clients/derivatives_trading_usd
 **Testing**
 
 - python3.11 -c "from binance_sdk_derivatives_trading_usds_futures import derivatives_trading_usds_futures; print('OK')"
+
+**How to run**
+
+  For Looping
+  - python3.11 /home/binancefuturebot.py --loop
+ 
+  For Run Once
+  - python3.11 /home/binancefuturebot.py
