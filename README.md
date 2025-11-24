@@ -7,9 +7,10 @@ Requirement
 - pip install numpy
 
 **Install manuall to include derivatives usds margined futures libray**
-git clone https://github.com/binance/binance-connector-python.git 
-cd binance-connector-python 
-export PYTHONPATH=$PYTHONPATH:$(pwd)/clients/derivatives_trading_usds_futures/src
+
+- git clone https://github.com/binance/binance-connector-python.git 
+- cd binance-connector-python 
+- export PYTHONPATH=$PYTHONPATH:$(pwd)/clients/derivatives_trading_usds_futures/src
 
 **Find Binance Common **
 find . -type d -name "binance_common" 
