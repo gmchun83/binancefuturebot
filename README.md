@@ -2,7 +2,7 @@
 **Documentation**
 https://developers.binance.com/
 
-**Requirement  **
+**Requirement**
 - Python 3.11 above 
 - pip install pydantic 
 - pip install aiohttp 
@@ -15,7 +15,7 @@ https://developers.binance.com/
 - cd binance-connector-python 
 - export PYTHONPATH=$PYTHONPATH:$(pwd)/clients/derivatives_trading_usds_futures/src
 
-**Find Binance Common **
+**Find Binance Common**
 
 - find . -type d -name "binance_common" 
 - Expected output (based on Binance’s repo structure): 
