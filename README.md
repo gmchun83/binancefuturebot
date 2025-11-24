@@ -25,7 +25,7 @@ https://developers.binance.com/
 PYTHONPATH=$PYTHONPATH:$(pwd)/common/src:$(pwd)/clients/derivatives_trading_usd
  s_futures/src 
 
-Then go back folder to binance-connector-python
+**Then go back folder to binance-connector-python**
 
 - cd clients/derivatives_trading_usds_futures 
 - pip install .
