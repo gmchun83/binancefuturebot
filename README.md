@@ -1,6 +1,8 @@
 **Binance future bot**
+**Documentation**
 https://developers.binance.com/
-Requirement  
+
+**Requirement  **
 - Python 3.11 above 
 - pip install pydantic 
 - pip install aiohttp 
