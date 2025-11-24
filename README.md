@@ -3,24 +3,32 @@
 Using outbreak strategic for tp and sl
 
 [Start Bot]
+
 Entry on confirmed breakout (e.g., 15m or 1h chart)
 Risk defined: (Entry - SL) = R
 
 [Create SL]
+
 Stop-loss = below/above breakout base (support or resistance)
 
 [Create TP]
+
 Target R-Multiple Purpose
 TP1 1.5R Lock in partial profit, reduce risk
 TP2 2R Solid return with good risk-reward
 TP3 3R Maximize profit on strong breakout moves
 
 [SL Management]
+
  After TP1, move SL to break-even
+
  After TP2, move SL to TP1
+
  After TP3,close position 
 
+
 **Documentation**
+
 https://developers.binance.com/
 
 **Requirement**
