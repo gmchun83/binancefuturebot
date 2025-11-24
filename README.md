@@ -1,4 +1,5 @@
 **Binance future bot**
+
 Requirement  
 - Python 3.11 above 
 - pip install pydantic 
