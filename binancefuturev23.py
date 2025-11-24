@@ -132,6 +132,76 @@ def get_market_trend(symbol="BTCUSDT", interval="1m", limit=50):
 #   ORDER PLACEMENT LOGIC
 # ==========================
 
+def get_order_status(symbol, order_id=None, client_order_id=None, start_time=None):
+    """
+    Get specific order status by filtering all_orders() - since get_order doesn't exist in USD-M Futures SDK
+    """
+    try:
+        # Get all orders and filter - use start_time to only get recent orders
+        orders = get_all_orders(symbol, start_time=start_time)
+        if not orders:
+            return None
+        
+        # Look for the specific order
+        target_order = None
+        for order in orders:
+            # Check by order_id
+            if order_id and (str(order.get('orderId')) == str(order_id) or str(order.get('order_id')) == str(order_id)):
+                target_order = order
+                break
+            # Check by client_order_id
+            if client_order_id and (order.get('clientOrderId') == client_order_id or order.get('client_order_id') == client_order_id):
+                target_order = order
+                break
+        
+        if target_order:
+            status = target_order.get('status')
+            client_id = target_order.get('clientOrderId') or target_order.get('client_order_id')
+            logging.info(f"Order status: {status} for {client_order_id or order_id} (ClientOrderId: {client_id})")
+        else:
+            logging.info(f"Order not found for {client_order_id or order_id}")
+            
+        return target_order
+        
+    except Exception as e:
+        logging.error(f"get_order_status() error: {e}")
+        return None
+
+def check_tp_filled(symbol, client_order_id, start_time=None):
+    """
+    Specifically check if a TP order is filled by its clientOrderId
+    """
+    order_data = get_order_status(symbol=symbol, client_order_id=client_order_id, start_time=start_time)
+    if not order_data:
+        return False
+    
+    status = order_data.get("status")
+    executed_qty = float(order_data.get("executedQty", 0))
+    orig_qty = float(order_data.get("origQty", 0))
+    
+    # Order is filled if status is FILLED and executed quantity matches original
+    is_filled = (status == "FILLED" and executed_qty >= orig_qty)
+    
+    if is_filled:
+        logging.info(f"✅ TP order filled: {client_order_id}")
+    
+    return is_filled
+
+def check_tp_filled_with_retry(symbol, client_order_id, max_retries=3, start_time=None):
+    """Check TP order status with retry logic"""
+    for attempt in range(max_retries):
+        try:
+            result = check_tp_filled(symbol, client_order_id, start_time=start_time)
+            return result  # Return whatever result we get, even if None
+        except Exception as e:
+            logging.warning(f"Attempt {attempt + 1} failed: {e}")
+        time.sleep(1)  # Brief pause between retries
+    return False  # Default to not filled if all retries fail
+
+
+
+
+
 def compute_targets(entry_price, atr, trend):
     """
     Compute Stop-Loss and Take-Profit levels based on R-multiple breakout system.
@@ -429,48 +499,105 @@ def place_take_profits(symbol, side, qty, entry_price, atr, ts, leverage=20):
 # ==========================
 #   MAIN BOT EXECUTION
 # ==========================
-def get_all_orders(symbol="BTCUSDT"):
+def get_all_orders(symbol="BTCUSDT", start_time=None, limit=100):
     """
     Get all orders using official Binance SDK.
-    Logs full request and response content for debugging.
+    Enhanced to handle different response formats.
     """
     try:
         logging.info(f"📤 Sending request to get all orders for: {symbol}")
-        response = client.rest_api.all_orders(symbol=symbol)
+        
+        # Call the API with parameters to get recent orders
+        response = client.rest_api.all_orders(
+            symbol=symbol,
+            limit=limit,
+            start_time=start_time
+        )
 
         rate_limits = getattr(response, "rate_limits", [])
         logging.info(f"📥 API Rate Limits: {rate_limits}")
 
+        # Extract data using the data() method
         if hasattr(response, "data") and callable(response.data):
-            raw = response.data()
-        elif hasattr(response, "data"):
-            raw = response.data
+            raw_data = response.data()
         else:
-            raw = response
+            raw_data = response
 
-        # Debug log full raw object
-        logging.debug(f"🔍 Raw Response Object: {raw}")
-
-        if hasattr(raw, "data"):
-            raw = getattr(raw, "data")
-
-        if isinstance(raw, list):
-            data = [dict(r) if not isinstance(r, dict) else r for r in raw]
-        elif isinstance(raw, dict):
-            data = [raw]
-        elif hasattr(raw, "model_dump"):
-            dumped = raw.model_dump()
-            data = dumped.get("data", []) if isinstance(dumped, dict) else [dumped]
-        elif hasattr(raw, "__dict__"):
-            data = [vars(raw)]
+        # Debug log
+        logging.debug(f"🔍 Raw Response Type: {type(raw_data)}")
+        
+        # Handle different response formats - this is the key fix
+        orders = []
+        
+        if isinstance(raw_data, list):
+            # Direct list of orders (most common case)
+            orders = raw_data
+            logging.debug(f"Got list of {len(orders)} orders")
         else:
-            data = list(raw) if raw else []
+            # Try to extract data from response object
+            logging.debug(f"Raw data structure: {dir(raw_data)}")
+            
+            # If it has a data attribute, use that
+            if hasattr(raw_data, 'data'):
+                data_attr = getattr(raw_data, 'data')
+                if callable(data_attr):
+                    orders = data_attr()
+                else:
+                    orders = data_attr
+                logging.debug(f"Extracted {len(orders)} orders from data attribute")
+            
+            # If it's a single order object, wrap in list
+            elif hasattr(raw_data, 'orderId') or hasattr(raw_data, 'order_id'):
+                orders = [raw_data]
+                logging.debug("Wrapped single order in list")
+            
+            # Last resort: try to convert to list
+            else:
+                try:
+                    orders = list(raw_data)
+                    logging.debug(f"Converted to list: {len(orders)} orders")
+                except:
+                    orders = []
+                    logging.warning("Could not convert response to orders list")
 
-        logging.info(f"✅ Retrieved {len(data)} orders from Binance.")
-        for order in data:
-            logging.debug(f"🧾 Order: {order}")
+        # Convert all orders to dictionaries for consistent handling
+        formatted_orders = []
+        for order in orders:
+            if isinstance(order, dict):
+                formatted_orders.append(order)
+            elif hasattr(order, 'model_dump'):
+                # Pydantic model
+                formatted_orders.append(order.model_dump())
+            elif hasattr(order, '__dict__'):
+                # Regular object
+                formatted_orders.append(vars(order))
+            else:
+                # Try to convert to dict
+                try:
+                    formatted_orders.append(dict(order))
+                except:
+                    logging.warning(f"Could not convert order to dict: {order}")
+                    continue
 
-        return data
+        # Log some order details for debugging
+        logging.info(f"✅ Retrieved {len(formatted_orders)} orders from Binance.")
+        
+        # Log all clientOrderIds to see what we actually got
+        client_order_ids = []
+        for order in formatted_orders[:10]:  # Log first 10 to avoid spam
+            client_order_id = order.get('clientOrderId') or order.get('client_order_id')
+            status = order.get('status', 'N/A')
+            order_id = order.get('orderId') or order.get('order_id')
+            if client_order_id:
+                client_order_ids.append(client_order_id)
+                logging.debug(f"🧾 Order: {order_id} - ClientOrderId: {client_order_id} - Status: {status}")
+            else:
+                logging.debug(f"🧾 Order: {order_id} - No ClientOrderId - Status: {status}")
+        
+        if client_order_ids:
+            logging.debug(f"Found ClientOrderIds: {client_order_ids}")
+
+        return formatted_orders
 
     except Exception as e:
         logging.error(f"❌ get_all_orders() error: {e}")
@@ -518,7 +645,6 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
 
     # Widen the stop loss to 3×ATR
     tp1, tp2, tp3, sl = compute_targets(entry_price, atr, trend)
-    # sl = entry_price + atr * 3 if trend == "BEARISH" else entry_price - atr * 3
     logging.info(f"Adjusted SL = {sl:.2f}")
 
     side = NewOrderSideEnum["BUY"].value if trend == "BULLISH" else NewOrderSideEnum["SELL"].value
@@ -549,59 +675,53 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
             return
 
         # --- Place Take Profits with unique IDs ---
+        tp1_client_id = f"{symbol}_TP1_{TRADE_TS}"
+        tp2_client_id = f"{symbol}_TP2_{TRADE_TS}"
+        tp3_client_id = f"{symbol}_TP3_{TRADE_TS}"
         place_take_profits(symbol, side, qty, entry_price, atr, TRADE_TS, leverage=20)
 
         logging.info("Monitoring active orders for SL updates...")
 
         tp1_hit = False
         tp2_hit = False
+        sl_order_id = sl_order.get("orderId") or sl_order.get("order_id")
 
         while True:
             time.sleep(5)
 
-            orders = get_all_orders(symbol)
-            if not isinstance(orders, list) or not orders:
-                continue
+            # --- Enhanced TP and SL detection using direct order status checks ---
+            # Use TRADE_TS as start_time to only get orders from this trade session
+            tp1_filled = check_tp_filled_with_retry(symbol, tp1_client_id, start_time=TRADE_TS)
+            tp2_filled = check_tp_filled_with_retry(symbol, tp2_client_id, start_time=TRADE_TS)
+            tp3_filled = check_tp_filled_with_retry(symbol, tp3_client_id, start_time=TRADE_TS)
 
-            
-            # --- Enhanced TP and SL detection using GET /fapi/v1/order for each TP ---
-            # --- TP and SL detection using get_all_orders ---
-            # --- Refined TP and SL detection by clientOrderId ---
-            tp1_filled = any(
-                o.get("clientOrderId") == f"{symbol}_TP1_{TRADE_TS}" and o.get("status") == "FILLED"
-                for o in orders
-            )
-            tp2_filled = any(
-                o.get("clientOrderId") == f"{symbol}_TP2_{TRADE_TS}" and o.get("status") == "FILLED"
-                for o in orders
-            )
-            tp3_filled = any(
-                o.get("clientOrderId") == f"{symbol}_TP3_{TRADE_TS}" and o.get("status") == "FILLED"
-                for o in orders
-            )
-
-
-            sl_order_id = sl_order.get("orderId") or sl_order.get("order_id")
-            sl_filled = any(
-                str(o.get("orderId") or o.get("order_id")) == str(sl_order_id)
-                and o.get("status") == "FILLED"
-                for o in orders
-            )
-
+            # Check SL order
+            sl_filled = False
+            sl_data = None
+            if sl_order_id:
+                sl_data = get_order_status(symbol=symbol, order_id=sl_order_id, start_time=TRADE_TS)
+                if sl_data and sl_data.get("status") == "FILLED":
+                    sl_filled = True
 
             # --- Stop Loss Triggered ---
             if sl_filled:
                 logging.warning("🚨 Stop Loss triggered! Cancelling all take-profit orders...")
                 cancel_all_open_tps(symbol)
-                close_open_position(symbol, side,TRADE_TS)
+                close_open_position(symbol, side, TRADE_TS)
 
-                exit_price = next(
-                    (float(o.get("avg_price") or o.get("stop_price") or 0)
-                     for o in orders
-                     if str(o.get("orderId") or o.get("order_id")) == str(sl_order_id)
-                     and o.get("status") == "FILLED"),
-                    sl
-                )
+                # Get exit price from SL order data
+                exit_price = sl
+                if sl_data:
+                    # Try different possible price fields
+                    exit_price = (
+                        sl_data.get("avgPrice") or 
+                        sl_data.get("stopPrice") or 
+                        sl_data.get("price") or 
+                        sl
+                    )
+                    if exit_price == 0 or exit_price is None:  # Fallback if price not available
+                        exit_price = sl
+                        
                 pnl, pct = summarize_pnl(entry_price, exit_price, qty, side)
                 send_telegram(f"🚨 <b>STOP LOSS Triggered</b>\n"
                             f"Symbol: {symbol}\n"
@@ -612,7 +732,6 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
                 break
 
             # --- TP1 reached → Move SL to Break-Even ---
-            # --- TP1 reached → Move SL to Break-Even ---
             if tp1_filled and not tp1_hit:
                 logging.info("✅ TP1 hit → Move SL to break-even")
                 send_telegram(f"✅ <b>TP1 Hit</b>\nSymbol: {symbol}\nOrder ID: {sl_order_id}\nQty: {qty}\nSL moved to break-even.")
@@ -621,6 +740,8 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
                     if new_sl:
                         sl_order = new_sl
                         sl_order_id = new_sl.get("order_id") or new_sl.get("orderId")
+                        logging.info(f"✅ SL moved to break-even. New SL order ID: {sl_order_id}")
+                        send_telegram(f"🛡️ <b>SL Moved to Break-Even</b>\nSymbol: {symbol}\nNew SL Order ID: {sl_order_id}" )
                 tp1_hit = True
 
             # --- TP2 reached → Move SL to TP1 ---
@@ -632,6 +753,8 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
                     if new_sl:
                         sl_order = new_sl
                         sl_order_id = new_sl.get("order_id") or new_sl.get("orderId")
+                        logging.info(f"✅ SL moved to TP1. New SL order ID: {sl_order_id}")
+                        send_telegram(f"🛡️ <b>SL Moved to TP1</b>\nSymbol: {symbol}\nNew SL Order ID: {sl_order_id}" )
                 tp2_hit = True
 
             # --- TP3 reached → Close position and cancel SL ---
@@ -643,16 +766,17 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
                     try:
                         client.rest_api.cancel_order(symbol=symbol, order_id=sl_order_id)
                         logging.info(f"✅ SL order {sl_order_id} canceled after TP3.")
+                        send_telegram(f"🛑 <b>SL Canceled after TP3</b>\nSymbol: {symbol}\nSL Order ID: {sl_order_id}" )
                     except Exception as ce:
                         logging.error(f"⚠️ Error canceling SL after TP3: {ce}")
+                        send_telegram(f"⚠️ <b>Error Canceling SL after TP3</b>\nSymbol: {symbol}\nSL Order ID: {sl_order_id}\nError: {ce}" )
 
                 close_open_position(symbol, side, TRADE_TS)
                 break
 
-
-
     except Exception as e:
         logging.error(f"execute_trade() error: {e}")
+        send_telegram(f"❌ <b>Trade Execution Error</b>\nSymbol: {symbol}\nError: {e}")
 
 
 if __name__ == "__main__":
@@ -667,13 +791,17 @@ if __name__ == "__main__":
             try:
                 execute_trade("BTCUSDT", 0.01)
                 logging.info("🔄 Trade cycle complete. Restarting in 5 seconds...")
+                send_telegram("🔄 <b>Trade Cycle Complete</b>\nRestarting in 5 seconds...")
                 time.sleep(5)
             except Exception as e:
                 logging.error(f"Main loop error: {e}")
+                send_telegram(f"❌ <b>Main Loop Error</b>\nError: {e}")
                 time.sleep(10)
     else:
         try:
             execute_trade("BTCUSDT", 0.01)
             logging.info("✅ Single trade execution complete.")
+            send_telegram("✅ <b>Single Trade Execution Complete</b>")
         except Exception as e:
             logging.error(f"Single run error: {e}")
+            send_telegram(f"❌ <b>Single Run Error</b>\nError: {e}")
