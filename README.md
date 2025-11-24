@@ -1,5 +1,7 @@
 **Binance future bot**
 
+Using outbreak strategic for tp and sl
+
 **Documentation**
 https://developers.binance.com/
 
