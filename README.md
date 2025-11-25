@@ -45,20 +45,51 @@ This protects gains while maximizing further profit.
 🧠 Trading Flow Diagram
 
 flowchart TD
-    A[Start Bot] --> B[Detect Breakout Signal]
-    B -->|Confirmed| C[Place Entry Order]
-    C --> D[Set Initial Stop-Loss]
-    D --> E[Monitor Price]
 
-    E -->|Hit TP1| F[Move SL to Break-Even]
-    F --> E
-    E -->|Hit TP2| G[Move SL to TP1]
-    G --> E
-    E -->|Hit TP3| H[Close Position]
+    %% ==== STAGES ====
+    Start([🟢 Start Bot])
+    Breakout{Breakout\nDetected?}
+    Entry[📌 Place Entry Order\n— Market or Limit —]
+    SL[🛡️ Set Initial Stop-Loss\n(below/above structure)]
+    Monitor[📊 Monitor Price Action]
 
-    E -->|Hit SL| I[Stop-Loss Triggered]
-    H --> J[Trade Complete]
-    I --> J
+    TP1Hit{TP1\nReached?}
+    MoveToBE[🔒 Move SL to\nBreak-Even]
+
+    TP2Hit{TP2\nReached?}
+    MoveToTP1[🔒 Move SL to\nTP1 Level]
+
+    TP3Hit{TP3\nReached?}
+    ClosePos[🚀 Close\nRemaining Position]
+
+    SLHit{SL\nHit?}
+    StopLossExit[❌ Stop-Loss Triggered]
+
+    End([🏁 Trade Completed])
+
+    %% ==== FLOW ====
+    Start --> Breakout
+    Breakout -->|Yes| Entry
+    Breakout -->|No| Breakout
+
+    Entry --> SL
+    SL --> Monitor
+
+    %% TP1 Branch
+    Monitor -->|Yes| TP1Hit
+    TP1Hit --> MoveToBE --> Monitor
+
+    %% TP2 Branch
+    Monitor -->|Yes| TP2Hit
+    TP2Hit --> MoveToTP1 --> Monitor
+
+    %% TP3 Branch
+    Monitor -->|Yes| TP3Hit
+    TP3Hit --> ClosePos --> End
+
+    %% Stop Loss
+    Monitor -->|SL Hit| SLHit --> StopLossExit --> End
+
 
 🧩 Installation
 
