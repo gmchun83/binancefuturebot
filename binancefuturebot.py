@@ -9,7 +9,7 @@ import argparse
 # --- Telegram Alert Helper ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
+time_offset = 0
 from binance_sdk_derivatives_trading_usds_futures.derivatives_trading_usds_futures import (
     DerivativesTradingUsdsFutures,
     ConfigurationRestAPI,
@@ -44,9 +44,7 @@ configuration_rest_api = ConfigurationRestAPI(
 )
 client = DerivativesTradingUsdsFutures(config_rest_api=configuration_rest_api)
 
-# NEW: Timestamp helper
-def now_ms():
-    return int(time.time() * 1000)
+
 
 # --- Helper: Check if Binance order is filled ---
 def is_order_filled(order: dict) -> bool:
@@ -60,6 +58,7 @@ def is_order_filled(order: dict) -> bool:
 # ==========================
 
 def sync_server_time():
+    """Sync with Binance server time and apply offset"""
     try:
         base_url = BASE_URL
         response = requests.get(f"{base_url}/fapi/v1/time", timeout=5)
@@ -67,12 +66,23 @@ def sync_server_time():
         server_time = response.json()["serverTime"]
         local_time = int(time.time() * 1000)
         offset = server_time - local_time
-        logging.info(f"Server time offset: {offset} ms")
+        
+        # Apply the offset to time functions for this session
+        global time_offset
+        time_offset = offset
+        
+        logging.info(f"🕒 Server time offset: {offset} ms (Server: {server_time}, Local: {local_time})")
         return offset
     except Exception as e:
         logging.error(f"Failed to get server time: {e}")
         return 0
 
+# Update your now_ms() function to use the offset
+def now_ms():
+    """Get current timestamp with server offset applied"""
+    global time_offset
+    base_time = int(time.time() * 1000)
+    return base_time + (time_offset if 'time_offset' in globals() else 0)
 
 def calculate_atr(symbol="BTCUSDT", period=14, limit=100):
     try:
@@ -236,9 +246,14 @@ def compute_targets(entry_price, atr, trend):
 
 def place_stop_loss(symbol, side, qty, stop_price, ts):
     """
-    Place a STOP_MARKET order for USDⓈ-M Futures (with safety check to avoid immediate trigger).
+    Place a STOP_MARKET order for USDⓈ-M Futures with improved error handling.
     """
     try:
+        # Validate quantity
+        if qty <= 0:
+            logging.error(f"❌ Invalid quantity for SL: {qty}")
+            return None
+            
         sl_side = "SELL" if side == "BUY" else "BUY"
 
         try:
@@ -256,13 +271,21 @@ def place_stop_loss(symbol, side, qty, stop_price, ts):
 
         logging.info(f"📈 Current mark price for {symbol}: {current_price}")
 
-
-        if side == "BUY" and stop_price >= current_price:
-            logging.warning(f"⛔ Skipping SL placement: stop_price {stop_price} ≥ current_price {current_price}")
-            return None
-        if side == "SELL" and stop_price <= current_price:
-            logging.warning(f"⛔ Skipping SL placement: stop_price {stop_price} ≤ current_price {current_price}")
-            return None
+        # Enhanced price validation with buffer
+        buffer_pct = 0.001  # 0.1% buffer
+        buffer_amount = current_price * buffer_pct
+        
+        if side == "BUY" and stop_price >= (current_price - buffer_amount):
+            logging.warning(f"⛔ Skipping SL placement: stop_price {stop_price} too close to current_price {current_price}")
+            # Adjust SL to be safely below current price
+            stop_price = current_price - buffer_amount
+            logging.info(f"🔄 Adjusted SL to: {stop_price:.2f}")
+            
+        if side == "SELL" and stop_price <= (current_price + buffer_amount):
+            logging.warning(f"⛔ Skipping SL placement: stop_price {stop_price} too close to current_price {current_price}")
+            # Adjust SL to be safely above current price
+            stop_price = current_price + buffer_amount
+            logging.info(f"🔄 Adjusted SL to: {stop_price:.2f}")
 
         # ✅ --- Safe to place stop order ---
         response = client.rest_api.new_order(
@@ -270,12 +293,13 @@ def place_stop_loss(symbol, side, qty, stop_price, ts):
             side=sl_side,
             type="STOP_MARKET",
             stop_price=str(round(stop_price, 1)),
-            quantity=qty,
+            quantity=round(qty, 3),  # Ensure proper quantity formatting
             close_position=False,
-            reduce_only=False,
+            reduce_only=True,  # Changed to True for safety
             working_type="CONTRACT_PRICE",
             new_client_order_id=f"{symbol}_SL_{ts}",
-            recv_window=60000
+            recv_window=10000,  # Increased recvWindow
+            time_in_force="GTC"  # Good Till Canceled to prevent expiration
         )
 
         data_method = getattr(response, "data", None)
@@ -300,7 +324,6 @@ def place_stop_loss(symbol, side, qty, stop_price, ts):
         return None
 
 
-
 def move_stop_loss(symbol, old_order_id, side, qty, new_stop_price, ts):
     """
     Move stop-loss: place new SL first, then cancel old SL for safety.
@@ -319,13 +342,23 @@ def move_stop_loss(symbol, old_order_id, side, qty, new_stop_price, ts):
         logging.error(f"⚠️ Failed to fetch mark price: {e}")
         current_price = 0.0
 
-    # Validation: avoid immediate stop-loss trigger
-    if side == "BUY" and new_stop_price >= current_price:
-        logging.warning(f"⛔ Invalid SL (BUY): {new_stop_price} ≥ mark {current_price}")
-        return None
-    if side == "SELL" and new_stop_price <= current_price:
-        logging.warning(f"⛔ Invalid SL (SELL): {new_stop_price} ≤ mark {current_price}")
-        return None
+    # Enhanced validation: avoid immediate stop-loss trigger with buffer
+    buffer_pct = 0.002  # 0.2% buffer
+    buffer_amount = current_price * buffer_pct
+    
+    if side == "BUY" and new_stop_price >= (current_price - buffer_amount):
+        logging.warning(f"⛔ Invalid SL (BUY): {new_stop_price} ≥ mark {current_price} (with buffer)")
+        # For BUY positions, try to set SL slightly below current price
+        adjusted_sl = current_price - buffer_amount
+        logging.info(f"🔄 Adjusting SL to: {adjusted_sl:.2f}")
+        new_stop_price = adjusted_sl
+        
+    if side == "SELL" and new_stop_price <= (current_price + buffer_amount):
+        logging.warning(f"⛔ Invalid SL (SELL): {new_stop_price} ≤ mark {current_price} (with buffer)")
+        # For SELL positions, try to set SL slightly above current price  
+        adjusted_sl = current_price + buffer_amount
+        logging.info(f"🔄 Adjusting SL to: {adjusted_sl:.2f}")
+        new_stop_price = adjusted_sl
 
     # Place new stop-loss first
     # Fetch current open position
@@ -334,19 +367,24 @@ def move_stop_loss(symbol, old_order_id, side, qty, new_stop_price, ts):
     position = next((p for p in positions if getattr(p, "symbol", None) == symbol), None)
     pos_amt = abs(float(getattr(position, "positionAmt", 0))) if position else qty
 
-    new_sl = place_stop_loss(symbol, side, pos_amt, new_stop_price,ts)
+    # Check if we still have a position
+    if pos_amt <= 0:
+        logging.warning("⚠️ No position found or zero quantity. Cannot move SL.")
+        return None
+
+    new_sl = place_stop_loss(symbol, side, pos_amt, new_stop_price, ts)
 
     if new_sl:
         logging.info("✅ New SL placed successfully. Now canceling old SL.")
         try:
             client.rest_api.cancel_order(symbol=symbol, order_id=old_order_id)
+            logging.info(f"✅ Old SL order {old_order_id} canceled.")
         except Exception as ce:
             logging.error(f"⚠️ Error canceling old SL: {ce}")
         return new_sl
     else:
         logging.error("❌ Failed to place new SL, old SL not canceled.")
         return None
-
 
 def cancel_all_open_tps(symbol="BTCUSDT"):
     """
@@ -443,6 +481,7 @@ def place_take_profits(symbol, side, qty, entry_price, atr, ts, leverage=20):
     Places 3 take-profit orders based on R-multiple system.
     TP1 = 1.5R, TP2 = 2R, TP3 = 3R
     """
+    
     try:
         tp_side = "SELL" if side == "BUY" else "BUY"
         trend = "BULLISH" if side == "BUY" else "BEARISH"
@@ -466,7 +505,7 @@ def place_take_profits(symbol, side, qty, entry_price, atr, ts, leverage=20):
                 price=str(round(price, 1)),
                 reduce_only=True,
                 new_client_order_id=f"{symbol}_{label}_{ts}",
-                recv_window=60000
+                recv_window=10000
             )
 
             # ✅ Official response is a typed model (not dict)
@@ -501,107 +540,137 @@ def place_take_profits(symbol, side, qty, entry_price, atr, ts, leverage=20):
 # ==========================
 def get_all_orders(symbol="BTCUSDT", start_time=None, limit=100):
     """
-    Get all orders using official Binance SDK.
-    Enhanced to handle different response formats.
+    Get all orders using official Binance SDK with enhanced time synchronization.
     """
-    try:
-        logging.info(f"📤 Sending request to get all orders for: {symbol}")
-        
-        # Call the API with parameters to get recent orders
-        response = client.rest_api.all_orders(
-            symbol=symbol,
-            limit=limit,
-            start_time=start_time
-        )
-
-        rate_limits = getattr(response, "rate_limits", [])
-        logging.info(f"📥 API Rate Limits: {rate_limits}")
-
-        # Extract data using the data() method
-        if hasattr(response, "data") and callable(response.data):
-            raw_data = response.data()
-        else:
-            raw_data = response
-
-        # Debug log
-        logging.debug(f"🔍 Raw Response Type: {type(raw_data)}")
-        
-        # Handle different response formats - this is the key fix
-        orders = []
-        
-        if isinstance(raw_data, list):
-            # Direct list of orders (most common case)
-            orders = raw_data
-            logging.debug(f"Got list of {len(orders)} orders")
-        else:
-            # Try to extract data from response object
-            logging.debug(f"Raw data structure: {dir(raw_data)}")
+    max_retries = 3
+    
+    for attempt in range(max_retries):
+        try:
+            logging.info(f"📤 Sending request to get all orders for: {symbol} (Attempt {attempt + 1}/{max_retries})")
             
-            # If it has a data attribute, use that
-            if hasattr(raw_data, 'data'):
-                data_attr = getattr(raw_data, 'data')
-                if callable(data_attr):
-                    orders = data_attr()
+            # Sync time before making the request
+            sync_server_time()
+            
+            # Call the API with parameters to get recent orders
+            response = client.rest_api.all_orders(
+                symbol=symbol,
+                limit=limit,
+                start_time=start_time,
+                recv_window=10000  # Increased recvWindow for better tolerance
+            )
+
+            rate_limits = getattr(response, "rate_limits", [])
+            logging.info(f"📥 API Rate Limits: {rate_limits}")
+
+            # Extract data using the data() method
+            if hasattr(response, "data") and callable(response.data):
+                raw_data = response.data()
+            else:
+                raw_data = response
+
+            # Debug log
+            logging.debug(f"🔍 Raw Response Type: {type(raw_data)}")
+            
+            # Handle different response formats - this is the key fix
+            orders = []
+            
+            if isinstance(raw_data, list):
+                # Direct list of orders (most common case)
+                orders = raw_data
+                logging.debug(f"Got list of {len(orders)} orders")
+            else:
+                # Try to extract data from response object
+                logging.debug(f"Raw data structure: {dir(raw_data)}")
+                
+                # If it has a data attribute, use that
+                if hasattr(raw_data, 'data'):
+                    data_attr = getattr(raw_data, 'data')
+                    if callable(data_attr):
+                        orders = data_attr()
+                    else:
+                        orders = data_attr
+                    logging.debug(f"Extracted {len(orders)} orders from data attribute")
+                
+                # If it's a single order object, wrap in list
+                elif hasattr(raw_data, 'orderId') or hasattr(raw_data, 'order_id'):
+                    orders = [raw_data]
+                    logging.debug("Wrapped single order in list")
+                
+                # Last resort: try to convert to list
                 else:
-                    orders = data_attr
-                logging.debug(f"Extracted {len(orders)} orders from data attribute")
+                    try:
+                        orders = list(raw_data)
+                        logging.debug(f"Converted to list: {len(orders)} orders")
+                    except:
+                        orders = []
+                        logging.warning("Could not convert response to orders list")
+
+            # Convert all orders to dictionaries for consistent handling
+            formatted_orders = []
+            for order in orders:
+                if isinstance(order, dict):
+                    formatted_orders.append(order)
+                elif hasattr(order, 'model_dump'):
+                    # Pydantic model
+                    formatted_orders.append(order.model_dump())
+                elif hasattr(order, '__dict__'):
+                    # Regular object
+                    formatted_orders.append(vars(order))
+                else:
+                    # Try to convert to dict
+                    try:
+                        formatted_orders.append(dict(order))
+                    except:
+                        logging.warning(f"Could not convert order to dict: {order}")
+                        continue
+
+            # Log some order details for debugging
+            logging.info(f"✅ Retrieved {len(formatted_orders)} orders from Binance.")
             
-            # If it's a single order object, wrap in list
-            elif hasattr(raw_data, 'orderId') or hasattr(raw_data, 'order_id'):
-                orders = [raw_data]
-                logging.debug("Wrapped single order in list")
+            # Log all clientOrderIds to see what we actually got
+            client_order_ids = []
+            for order in formatted_orders[:10]:  # Log first 10 to avoid spam
+                client_order_id = order.get('clientOrderId') or order.get('client_order_id')
+                status = order.get('status', 'N/A')
+                order_id = order.get('orderId') or order.get('order_id')
+                if client_order_id:
+                    client_order_ids.append(client_order_id)
+                    logging.debug(f"🧾 Order: {order_id} - ClientOrderId: {client_order_id} - Status: {status}")
+                else:
+                    logging.debug(f"🧾 Order: {order_id} - No ClientOrderId - Status: {status}")
             
-            # Last resort: try to convert to list
+            if client_order_ids:
+                logging.debug(f"Found ClientOrderIds: {client_order_ids}")
+
+            return formatted_orders
+
+        except Exception as e:
+            error_msg = str(e)
+            logging.warning(f"❌ get_all_orders() attempt {attempt + 1} failed: {error_msg}")
+            
+            # Check if this is a timestamp error that we should retry
+            timestamp_errors = [
+                "Timestamp for this request is outside of the recvWindow",
+                "recvWindow",
+                "timestamp",
+                "Server time",
+                "time synchron"
+            ]
+            
+            is_timestamp_error = any(error in error_msg for error in timestamp_errors)
+            
+            if is_timestamp_error and attempt < max_retries - 1:
+                logging.info(f"🔄 Timestamp error detected, re-syncing time and retrying in 2 seconds...")
+                sync_server_time()  # Re-sync time
+                time.sleep(2)  # Wait a bit longer before retry
+                continue
             else:
-                try:
-                    orders = list(raw_data)
-                    logging.debug(f"Converted to list: {len(orders)} orders")
-                except:
-                    orders = []
-                    logging.warning("Could not convert response to orders list")
-
-        # Convert all orders to dictionaries for consistent handling
-        formatted_orders = []
-        for order in orders:
-            if isinstance(order, dict):
-                formatted_orders.append(order)
-            elif hasattr(order, 'model_dump'):
-                # Pydantic model
-                formatted_orders.append(order.model_dump())
-            elif hasattr(order, '__dict__'):
-                # Regular object
-                formatted_orders.append(vars(order))
-            else:
-                # Try to convert to dict
-                try:
-                    formatted_orders.append(dict(order))
-                except:
-                    logging.warning(f"Could not convert order to dict: {order}")
-                    continue
-
-        # Log some order details for debugging
-        logging.info(f"✅ Retrieved {len(formatted_orders)} orders from Binance.")
-        
-        # Log all clientOrderIds to see what we actually got
-        client_order_ids = []
-        for order in formatted_orders[:10]:  # Log first 10 to avoid spam
-            client_order_id = order.get('clientOrderId') or order.get('client_order_id')
-            status = order.get('status', 'N/A')
-            order_id = order.get('orderId') or order.get('order_id')
-            if client_order_id:
-                client_order_ids.append(client_order_id)
-                logging.debug(f"🧾 Order: {order_id} - ClientOrderId: {client_order_id} - Status: {status}")
-            else:
-                logging.debug(f"🧾 Order: {order_id} - No ClientOrderId - Status: {status}")
-        
-        if client_order_ids:
-            logging.debug(f"Found ClientOrderIds: {client_order_ids}")
-
-        return formatted_orders
-
-    except Exception as e:
-        logging.error(f"❌ get_all_orders() error: {e}")
-        return []
+                # If it's not a timestamp error or we've exhausted retries, log and return empty
+                logging.error(f"❌ get_all_orders() final error after {attempt + 1} attempts: {e}")
+                return []
+    
+    # This should not be reached, but as a fallback
+    return []
 
 def summarize_pnl(entry_price, exit_price, qty, side):
     """Compute and log the profit or loss in USDT and percentage."""
@@ -670,7 +739,7 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
             type="MARKET",
             new_client_order_id=f"{symbol}_ENTRY_{TRADE_TS}",
             quantity=qty,
-            recv_window=60000
+            recv_window=10000
         )
         logging.info(f"Main order executed: {trend} @ ~{entry_price}")
 
@@ -700,7 +769,7 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
         tp1_hit = False
         tp2_hit = False
         sl_order_id = sl_order.get("orderId") or sl_order.get("order_id")
-
+        remaining_qty = qty
         while True:
             time.sleep(5)
 
@@ -709,6 +778,14 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
             tp1_filled = check_tp_filled_with_retry(symbol, tp1_client_id, start_time=TRADE_TS)
             tp2_filled = check_tp_filled_with_retry(symbol, tp2_client_id, start_time=TRADE_TS)
             tp3_filled = check_tp_filled_with_retry(symbol, tp3_client_id, start_time=TRADE_TS)
+
+            # Update remaining quantity based on filled TPs
+            if tp1_filled and not tp1_hit:
+                remaining_qty -= qty * 0.5
+            if tp2_filled and not tp2_hit:
+                remaining_qty -= qty * 0.3
+            if tp3_filled:
+                remaining_qty = 0
 
             # Check SL order
             sl_filled = False
@@ -758,7 +835,7 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
                 logging.info("✅ TP1 hit → Move SL to break-even")
                 send_telegram(f"✅ <b>TP1 Hit</b>\nSymbol: {symbol}\nOrder ID: {sl_order_id}\nQty: {qty}\nSL moved to break-even.")
                 if sl_order_id:
-                    new_sl = move_stop_loss(symbol, sl_order_id, side, qty, entry_price, TRADE_TS)
+                    new_sl = move_stop_loss(symbol, sl_order_id, side, remaining_qty, entry_price, TRADE_TS)
                     if new_sl:
                         sl_order = new_sl
                         sl_order_id = new_sl.get("order_id") or new_sl.get("orderId")
@@ -771,7 +848,7 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
                 logging.info("✅ TP2 hit → Move SL to TP1")
                 send_telegram(f"🏆 <b>TP2 Hit</b>\nSymbol: {symbol}\nOrder ID: {sl_order_id}\nQty: {qty}\nSL moved to TP1.")
                 if sl_order_id:
-                    new_sl = move_stop_loss(symbol, sl_order_id, side, qty, tp1, TRADE_TS)
+                    new_sl = move_stop_loss(symbol, sl_order_id, side, remaining_qty, tp1, TRADE_TS)
                     if new_sl:
                         sl_order = new_sl
                         sl_order_id = new_sl.get("order_id") or new_sl.get("orderId")
