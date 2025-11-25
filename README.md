@@ -4,10 +4,15 @@ Automated TP/SL Management • Multi-R Take Profit System • Python 3.11+
 
 
 A high-precision Binance USDT-M Futures trading bot that uses a breakout strategy with automated:
+
 ✔ Entry detection
+
 ✔ Stop-loss placement
+
 ✔ TP1/TP2/TP3 targets (R-Multiple system)
+
 ✔ Dynamic SL trailing logic
+
 
 📌 Features
 
