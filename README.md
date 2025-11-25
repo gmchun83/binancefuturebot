@@ -1,79 +1,124 @@
-**Binance future bot**
+🚀 Binance Futures Breakout Trading Bot
 
-Using outbreak strategic for tp and sl
-
-[Start Bot]
-
-- Entry on confirmed breakout (e.g., 15m or 1h chart)
-- Risk defined: (Entry - SL) = R
-
-[Create SL]
-
-- Stop-loss = below/above breakout base (support or resistance)
-
-[Create TP]
-
-Target R-Multiple Purpose
-
-- TP1 1.5R Lock in partial profit, reduce risk
-
-- TP2 2R Solid return with good risk-reward
-
-- TP3 3R Maximize profit on strong breakout moves
+Automated TP/SL Management • Multi-R Take Profit System • Python 3.11+
 
 
-[SL Management]
+A high-precision Binance USDT-M Futures trading bot that uses a breakout strategy with automated:
+✔ Entry detection
+✔ Stop-loss placement
+✔ TP1/TP2/TP3 targets (R-Multiple system)
+✔ Dynamic SL trailing logic
 
-- After TP1, move SL to break-even
+📌 Features
+🔥 Breakout Trading Logic
 
-- After TP2, move SL to TP1
+Entry triggered by confirmed price breakout (15m/1h recommended)
 
-- After TP3,close position 
+Based on reliable swing-structure support & resistance breakouts
+
+🎯 Multi-Target R-Multiple Take Profit System
+Take Profit	R Multiple	Purpose
+TP1	1.5R	Partial exit + risk reduction
+TP2	2R	Solid profit with strong risk-reward
+TP3	3R	Capture extended breakout trend
+🛡️ Advanced Stop-Loss Management
+
+SL placed at correct structural support/resistance
+
+After TP1 hit → SL moves to Break-Even (BE)
+
+After TP2 hit → SL moves to TP1 level
+
+After TP3 hit → Position fully closed
+
+This protects gains while maximizing further profit.
+
+🧠 Trading Flow Diagram
+flowchart TD
+    A[Start Bot] --> B[Detect Breakout Signal]
+    B -->|Confirmed| C[Place Entry Order]
+    C --> D[Set Initial Stop-Loss]
+    D --> E[Monitor Price]
+
+    E -->|Hit TP1| F[Move SL to Break-Even]
+    F --> E
+    E -->|Hit TP2| G[Move SL to TP1]
+    G --> E
+    E -->|Hit TP3| H[Close Position]
+
+    E -->|Hit SL| I[Stop-Loss Triggered]
+    H --> J[Trade Complete]
+    I --> J
+
+🧩 Installation
+✔ Requirements
+
+Python 3.11+
+
+Install required packages:
+
+pip install pydantic aiohttp python-dotenv numpy
+
+🔧 Install Binance USDS-M Futures SDK
+
+⚠ pip install binance-connector-python DOES NOT include the required derivatives USDS-M futures modules.
+You must install it manually:
+
+1. Clone Binance connector repo:
+git clone https://github.com/binance/binance-connector-python.git
+cd binance-connector-python
+
+2. Add USDS Futures module path:
+export PYTHONPATH=$PYTHONPATH:$(pwd)/clients/derivatives_trading_usds_futures/src
+
+3. Locate binance_common
+find . -type d -name "binance_common"
 
 
-**Documentation**
+Usually found at:
+
+clients/binance_common/src/binance_common
+
+
+Add it to PYTHONPATH:
+
+export PYTHONPATH=$PYTHONPATH:$(pwd)/common/src:$(pwd)/clients/derivatives_trading_usds_futures/src
+
+4. Install the futures package
+cd clients/derivatives_trading_usds_futures
+pip install .
+
+5. Verify installation
+python3.11 -c "from binance_sdk_derivatives_trading_usds_futures import derivatives_trading_usds_futures; print('OK')"
+
+🔑 Environment Setup
+
+Rename .env.example:
+
+mv .env.example .env
+
+
+Fill in:
+
+BINANCE_API_KEY=
+BINANCE_API_SECRET=
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+
+▶ How to Run the Bot
+🔁 Loop Mode (Recommended – runs continuously)
+python3.11 binancefuturebot.py --loop
+
+🎯 One-Time Mode (Run once & exit)
+python3.11 binancefuturebot.py
+
+🧪 Testing
+
+To test derivatives futures import:
+
+python3.11 -c "from binance_sdk_derivatives_trading_usds_futures import derivatives_trading_usds_futures; print('OK')"
+
+📚 Documentation
+Binance Official API Docs
 
 https://developers.binance.com/
-
-**Requirement**
-- Python 3.11 above 
-- pip install pydantic 
-- pip install aiohttp 
-- pip install python-dotenv 
-- pip install numpy
-
-**Install manually to include derivatives usds margined futures library**
-
-- git clone https://github.com/binance/binance-connector-python.git 
-- cd binance-connector-python 
-- export PYTHONPATH=$PYTHONPATH:$(pwd)/clients/derivatives_trading_usds_futures/src
-- 
-Note:pip install binance-connector-python wont include derivatives usds margined futures library
-
-**Find Binance Common**
-
-- find . -type d -name "binance_common" 
-- Expected output (based on Binance’s repo structure): 
-- clients/binance_common/src/binance_common 
-- export 
-PYTHONPATH=$PYTHONPATH:$(pwd)/common/src:$(pwd)/clients/derivatives_trading_usd
- s_futures/src 
-
-**Then go back folder to binance-connector-python**
-
-- cd clients/derivatives_trading_usds_futures 
-- pip install .
-
-**Testing derivatives trading usds futures**
-
-- python3.11 -c "from binance_sdk_derivatives_trading_usds_futures import derivatives_trading_usds_futures; print('OK')"
-
-**How to run**
-
-Rename .env.example to .ev then keyin detail for binance api  and telegam api token
-
-  For Looping
-  - python3.11 binancefuturebot.py --loop
- 
-  For Run Once
-  - python3.11 binancefuturebot.py
