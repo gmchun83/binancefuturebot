@@ -334,7 +334,7 @@ def move_stop_loss(symbol, old_order_id, side, qty, new_stop_price, ts):
     position = next((p for p in positions if getattr(p, "symbol", None) == symbol), None)
     pos_amt = abs(float(getattr(position, "positionAmt", 0))) if position else qty
 
-    new_sl = place_stop_loss(symbol, side, pos_amt, new_stop_price)
+    new_sl = place_stop_loss(symbol, side, pos_amt, new_stop_price,ts)
 
     if new_sl:
         logging.info("✅ New SL placed successfully. Now canceling old SL.")
