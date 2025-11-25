@@ -10,6 +10,7 @@ A high-precision Binance USDT-M Futures trading bot that uses a breakout strateg
 ✔ Dynamic SL trailing logic
 
 📌 Features
+
 🔥 Breakout Trading Logic
 
 Entry triggered by confirmed price breakout (15m/1h recommended)
@@ -17,10 +18,15 @@ Entry triggered by confirmed price breakout (15m/1h recommended)
 Based on reliable swing-structure support & resistance breakouts
 
 🎯 Multi-Target R-Multiple Take Profit System
+
 Take Profit	R Multiple	Purpose
+
 TP1	1.5R	Partial exit + risk reduction
+
 TP2	2R	Solid profit with strong risk-reward
+
 TP3	3R	Capture extended breakout trend
+
 🛡️ Advanced Stop-Loss Management
 
 SL placed at correct structural support/resistance
@@ -34,6 +40,7 @@ After TP3 hit → Position fully closed
 This protects gains while maximizing further profit.
 
 🧠 Trading Flow Diagram
+
 flowchart TD
     A[Start Bot] --> B[Detect Breakout Signal]
     B -->|Confirmed| C[Place Entry Order]
@@ -51,6 +58,7 @@ flowchart TD
     I --> J
 
 🧩 Installation
+
 ✔ Requirements
 
 Python 3.11+
@@ -66,12 +74,13 @@ You must install it manually:
 
 1. Clone Binance connector repo:
 git clone https://github.com/binance/binance-connector-python.git
-cd binance-connector-python
 
-2. Add USDS Futures module path:
+2. cd binance-connector-python
+
+3. Add USDS Futures module path:
 export PYTHONPATH=$PYTHONPATH:$(pwd)/clients/derivatives_trading_usds_futures/src
 
-3. Locate binance_common
+4. Locate binance_common
 find . -type d -name "binance_common"
 
 
@@ -85,10 +94,13 @@ Add it to PYTHONPATH:
 export PYTHONPATH=$PYTHONPATH:$(pwd)/common/src:$(pwd)/clients/derivatives_trading_usds_futures/src
 
 4. Install the futures package
+
 cd clients/derivatives_trading_usds_futures
+
 pip install .
 
 5. Verify installation
+   
 python3.11 -c "from binance_sdk_derivatives_trading_usds_futures import derivatives_trading_usds_futures; print('OK')"
 
 🔑 Environment Setup
@@ -101,15 +113,21 @@ mv .env.example .env
 Fill in:
 
 BINANCE_API_KEY=
+
 BINANCE_API_SECRET=
+
 TELEGRAM_BOT_TOKEN=
+
 TELEGRAM_CHAT_ID=
 
 ▶ How to Run the Bot
+
 🔁 Loop Mode (Recommended – runs continuously)
+
 python3.11 binancefuturebot.py --loop
 
 🎯 One-Time Mode (Run once & exit)
+
 python3.11 binancefuturebot.py
 
 🧪 Testing
@@ -119,6 +137,7 @@ To test derivatives futures import:
 python3.11 -c "from binance_sdk_derivatives_trading_usds_futures import derivatives_trading_usds_futures; print('OK')"
 
 📚 Documentation
+
 Binance Official API Docs
 
 https://developers.binance.com/
