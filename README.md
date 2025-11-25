@@ -1,4 +1,4 @@
-🚀 Binance Futures Breakout Trading Bot
+**🚀 Binance Futures Breakout Trading Bot**
 
 Automated TP/SL Management • Multi-R Take Profit System • Python 3.11+
 
@@ -14,9 +14,9 @@ A high-precision Binance USDT-M Futures trading bot that uses a breakout strateg
 ✔ Dynamic SL trailing logic
 
 
-📌 Features
+**📌 Features**
 
-🔥 Breakout Trading Logic
+**🔥 Breakout Trading Logic**
 
 Entry triggered by confirmed price breakout (15m/1h recommended)
 
@@ -42,7 +42,8 @@ After TP3 hit → Position fully closed
 
 This protects gains while maximizing further profit.
 
-🧠 Trading Flow Diagram
+
+**🧠 Trading Flow Diagram**
 
 flowchart TD
 
@@ -91,7 +92,7 @@ flowchart TD
     Monitor -->|SL Hit| SLHit --> StopLossExit --> End
 
 
-🧩 Installation
+**🧩 Installation**
 
 ✔ Requirements
 
@@ -101,7 +102,8 @@ Install required packages:
 
 pip install pydantic aiohttp python-dotenv numpy
 
-🔧 Install Binance USDS-M Futures SDK
+
+**🔧 Install Binance USDS-M Futures SDK**
 
 ⚠ pip install binance-connector-python DOES NOT include the required derivatives USDS-M futures modules.
 You must install it manually:
@@ -137,7 +139,8 @@ pip install .
    
 python3.11 -c "from binance_sdk_derivatives_trading_usds_futures import derivatives_trading_usds_futures; print('OK')"
 
-🔑 Environment Setup
+
+**🔑 Environment Setup**
 
 Rename .env.example:
 
@@ -150,11 +153,15 @@ BINANCE_API_KEY=
 
 BINANCE_API_SECRET=
 
+BASE_PATH=https://demo-fapi.binance.com
+
 TELEGRAM_BOT_TOKEN=
 
 TELEGRAM_CHAT_ID=
 
-▶ How to Run the Bot
+Note:Use BASE PATH https://fapi.binance.com for live
+
+**▶ How to Run the Bot**
 
 🔁 Loop Mode (Recommended – runs continuously)
 
@@ -164,13 +171,13 @@ python3.11 binancefuturebot.py --loop
 
 python3.11 binancefuturebot.py
 
-🧪 Testing
+**🧪 Testing**
 
 To test derivatives futures import:
 
 python3.11 -c "from binance_sdk_derivatives_trading_usds_futures import derivatives_trading_usds_futures; print('OK')"
 
-📚 Documentation
+**📚 Documentation**
 
 Binance Official API Docs
 
