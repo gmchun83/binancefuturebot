@@ -22,7 +22,7 @@ Entry triggered by confirmed price breakout (15m/1h recommended)
 
 Based on reliable swing-structure support & resistance breakouts
 
-🎯 Multi-Target R-Multiple Take Profit System
+**🎯 Multi-Target R-Multiple Take Profit System**
 
 | Target  | R Multiple | Purpose                                   |
 | ------- | ---------- | ----------------------------------------- |
@@ -30,7 +30,7 @@ Based on reliable swing-structure support & resistance breakouts
 | **TP2** | **2R**     | Strong reward with balanced safety        |
 | **TP3** | **3R**     | Max profit on major breakout continuation |
 
-🛡️ Advanced Stop-Loss Management
+**🛡️ Advanced Stop-Loss Management**
 
 SL placed at correct structural support/resistance
 
@@ -147,7 +147,7 @@ Rename .env.example:
 mv .env.example .env
 
 
-Fill in:
+**Fill in:**
 
 BINANCE_API_KEY=
 
@@ -160,6 +160,7 @@ TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 
 Note:Use BASE PATH https://fapi.binance.com for live
+
 
 **▶ How to Run the Bot**
 
