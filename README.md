@@ -70,7 +70,7 @@ PYTHONPATH=$PYTHONPATH:$(pwd)/common/src:$(pwd)/clients/derivatives_trading_usd
 
 **How to run**
 
-Rename .env.example to .ev then keyin binance api key and telegam api token
+Rename .env.example to .ev then keyin detail for binance api  and telegam api token
 
   For Looping
   - python3.11 binancefuturebot.py --loop
