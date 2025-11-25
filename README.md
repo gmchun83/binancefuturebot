@@ -14,6 +14,7 @@ A high-precision Binance USDT-M Futures trading bot that uses a breakout strateg
 ✔ Dynamic SL trailing logic
 
 
+
 **📌 Features**
 
 **🔥 Breakout Trading Logic**
@@ -41,6 +42,7 @@ After TP2 hit → SL moves to TP1 level
 After TP3 hit → Position fully closed
 
 This protects gains while maximizing further profit.
+
 
 
 **🧠 Trading Flow Diagram**
@@ -92,6 +94,7 @@ flowchart TD
     Monitor -->|SL Hit| SLHit --> StopLossExit --> End
 
 
+
 **🧩 Installation**
 
 ✔ Requirements
@@ -140,6 +143,7 @@ pip install .
 python3.11 -c "from binance_sdk_derivatives_trading_usds_futures import derivatives_trading_usds_futures; print('OK')"
 
 
+
 **🔑 Environment Setup**
 
 Rename .env.example:
@@ -162,6 +166,7 @@ TELEGRAM_CHAT_ID=
 Note:Use BASE PATH https://fapi.binance.com for live
 
 
+
 **▶ How to Run the Bot**
 
 🔁 Loop Mode (Recommended – runs continuously)
@@ -172,11 +177,13 @@ python3.11 binancefuturebot.py --loop
 
 python3.11 binancefuturebot.py
 
+
 **🧪 Testing**
 
 To test derivatives futures import:
 
 python3.11 -c "from binance_sdk_derivatives_trading_usds_futures import derivatives_trading_usds_futures; print('OK')"
+
 
 **📚 Documentation**
 
