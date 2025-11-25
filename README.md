@@ -49,13 +49,11 @@ flowchart TD
     B -->|Confirmed| C[Place Entry Order]
     C --> D[Set Initial Stop-Loss]
     D --> E[Monitor Price]
-
     E -->|Hit TP1| F[Move SL to Break-Even]
     F --> E
     E -->|Hit TP2| G[Move SL to TP1]
     G --> E
     E -->|Hit TP3| H[Close Position]
-
     E -->|Hit SL| I[Stop-Loss Triggered]
     H --> J[Trade Complete]
     I --> J
