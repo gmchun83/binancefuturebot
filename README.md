@@ -24,13 +24,11 @@ Based on reliable swing-structure support & resistance breakouts
 
 🎯 Multi-Target R-Multiple Take Profit System
 
-Take Profit	R Multiple	Purpose
-
-TP1	1.5R	Partial exit + risk reduction
-
-TP2	2R	Solid profit with strong risk-reward
-
-TP3	3R	Capture extended breakout trend
+| Target  | R Multiple | Purpose                                   |
+| ------- | ---------- | ----------------------------------------- |
+| **TP1** | **1.5R**   | Lock in early profit + reduce risk        |
+| **TP2** | **2R**     | Strong reward with balanced safety        |
+| **TP3** | **3R**     | Max profit on major breakout continuation |
 
 🛡️ Advanced Stop-Loss Management
 
