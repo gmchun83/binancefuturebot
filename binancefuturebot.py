@@ -141,7 +141,6 @@ def get_market_trend(symbol="BTCUSDT", interval="1m", limit=50):
 # ==========================
 #   ORDER PLACEMENT LOGIC
 # ==========================
-
 def get_order_status(symbol, order_id=None, client_order_id=None, start_time=None):
     """
     Get specific order status by filtering all_orders() - since get_order doesn't exist in USD-M Futures SDK
@@ -168,6 +167,10 @@ def get_order_status(symbol, order_id=None, client_order_id=None, start_time=Non
             status = target_order.get('status')
             client_id = target_order.get('clientOrderId') or target_order.get('client_order_id')
             logging.info(f"Order status: {status} for {client_order_id or order_id} (ClientOrderId: {client_id})")
+            
+            # Enhanced logging for expired orders
+            if status in ["EXPIRED", "CANCELED", "REJECTED"]:
+                logging.warning(f"⚠️ Order {client_order_id or order_id} has terminal status: {status}")
         else:
             logging.info(f"Order not found for {client_order_id or order_id}")
             
@@ -324,66 +327,118 @@ def place_stop_loss(symbol, side, qty, stop_price, ts):
         return None
 
 
+def get_current_position(symbol="BTCUSDT", max_retries=3):
+    """Get current position with retry logic"""
+    for attempt in range(max_retries):
+        try:
+            response = client.rest_api.position_information_v2()
+            positions = response.data()
+            
+            # Find the symbol's position
+            position = next((p for p in positions if getattr(p, "symbol", None) == symbol), None)
+            
+            if position:
+                pos_amt = float(getattr(position, "positionAmt", 0))
+                if pos_amt != 0:
+                    logging.info(f"✅ Current position: {pos_amt} for {symbol}")
+                    return position, pos_amt
+                else:
+                    logging.warning(f"⚠️ Position amount is zero for {symbol}")
+            else:
+                logging.warning(f"⚠️ No position found for {symbol}")
+            
+            # Wait and retry if not final attempt
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                
+        except Exception as e:
+            logging.error(f"❌ get_current_position() attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1)
+    
+    return None, 0
+
 def move_stop_loss(symbol, old_order_id, side, qty, new_stop_price, ts):
     """
     Move stop-loss: place new SL first, then cancel old SL for safety.
     """
     try:
-        # Fetch current mark price
-        response = requests.get(
-            f"{BASE_URL}/fapi/v1/premiumIndex",
-            params={"symbol": symbol},
-            timeout=5
-        )
-        response.raise_for_status()
-        current_price = float(response.json().get("markPrice", 0))
-        logging.info(f"📈 Current mark price for {symbol}: {current_price}")
-    except Exception as e:
-        logging.error(f"⚠️ Failed to fetch mark price: {e}")
-        current_price = 0.0
-
-    # Enhanced validation: avoid immediate stop-loss trigger with buffer
-    buffer_pct = 0.002  # 0.2% buffer
-    buffer_amount = current_price * buffer_pct
-    
-    if side == "BUY" and new_stop_price >= (current_price - buffer_amount):
-        logging.warning(f"⛔ Invalid SL (BUY): {new_stop_price} ≥ mark {current_price} (with buffer)")
-        # For BUY positions, try to set SL slightly below current price
-        adjusted_sl = current_price - buffer_amount
-        logging.info(f"🔄 Adjusting SL to: {adjusted_sl:.2f}")
-        new_stop_price = adjusted_sl
+        # Get current position with retry logic
+        position, pos_amt = get_current_position(symbol)
         
-    if side == "SELL" and new_stop_price <= (current_price + buffer_amount):
-        logging.warning(f"⛔ Invalid SL (SELL): {new_stop_price} ≤ mark {current_price} (with buffer)")
-        # For SELL positions, try to set SL slightly above current price  
-        adjusted_sl = current_price + buffer_amount
-        logging.info(f"🔄 Adjusting SL to: {adjusted_sl:.2f}")
-        new_stop_price = adjusted_sl
+        if not position or pos_amt == 0:
+            logging.error(f"❌ Cannot move SL: No active position found for {symbol}")
+            return None
 
-    # Place new stop-loss first
-    # Fetch current open position
-    response = client.rest_api.position_information_v2()
-    positions = response.data()
-    position = next((p for p in positions if getattr(p, "symbol", None) == symbol), None)
-    pos_amt = abs(float(getattr(position, "positionAmt", 0))) if position else qty
-
-    # Check if we still have a position
-    if pos_amt <= 0:
-        logging.warning("⚠️ No position found or zero quantity. Cannot move SL.")
-        return None
-
-    new_sl = place_stop_loss(symbol, side, pos_amt, new_stop_price, ts)
-
-    if new_sl:
-        logging.info("✅ New SL placed successfully. Now canceling old SL.")
+        # Fetch current mark price
         try:
-            client.rest_api.cancel_order(symbol=symbol, order_id=old_order_id)
-            logging.info(f"✅ Old SL order {old_order_id} canceled.")
-        except Exception as ce:
-            logging.error(f"⚠️ Error canceling old SL: {ce}")
-        return new_sl
-    else:
-        logging.error("❌ Failed to place new SL, old SL not canceled.")
+            response = requests.get(
+                f"{BASE_URL}/fapi/v1/premiumIndex",
+                params={"symbol": symbol},
+                timeout=5
+            )
+            response.raise_for_status()
+            current_price = float(response.json().get("markPrice", 0))
+            logging.info(f"📈 Current mark price for {symbol}: {current_price}")
+        except Exception as e:
+            logging.error(f"⚠️ Failed to fetch mark price: {e}")
+            current_price = 0.0
+
+        # Enhanced validation with proper side logic
+        buffer_pct = 0.002  # 0.2% buffer
+        buffer_amount = current_price * buffer_pct
+        
+        # FIXED: Correct SL validation logic for SELL positions
+        if side == "BUY":  # Long position
+            if new_stop_price >= (current_price - buffer_amount):
+                logging.warning(f"⛔ Invalid SL (BUY): {new_stop_price} ≥ mark {current_price} (with buffer)")
+                adjusted_sl = current_price - buffer_amount
+                logging.info(f"🔄 Adjusting SL to: {adjusted_sl:.2f}")
+                new_stop_price = adjusted_sl
+        else:  # SELL position (Short)
+            if new_stop_price <= (current_price + buffer_amount):
+                logging.warning(f"⛔ Invalid SL (SELL): {new_stop_price} ≤ mark {current_price} (with buffer)")
+                adjusted_sl = current_price + buffer_amount
+                logging.info(f"🔄 Adjusting SL to: {adjusted_sl:.2f}")
+                new_stop_price = adjusted_sl
+
+        # Use actual position amount instead of passed qty
+        actual_qty = abs(pos_amt)
+        
+        # Place new stop-loss first
+        new_sl = place_stop_loss(symbol, side, actual_qty, new_stop_price, f"{ts}_move")
+        
+        if new_sl:
+            logging.info("✅ New SL placed successfully. Now canceling old SL.")
+            try:
+                # Cancel old SL order
+                cancel_response = client.rest_api.cancel_order(
+                    symbol=symbol, 
+                    order_id=old_order_id
+                )
+                logging.info(f"✅ Old SL order {old_order_id} canceled.")
+                
+                # Send Telegram notification
+                send_telegram(
+                    f"🛡️ <b>Stop Loss Moved</b>\n"
+                    f"Symbol: {symbol}\n"
+                    f"From Order: {old_order_id}\n"
+                    f"To New SL: {new_stop_price:.2f}\n"
+                    f"Position: {actual_qty}\n"
+                    f"Reason: TP hit"
+                )
+                
+                return new_sl
+            except Exception as ce:
+                logging.error(f"⚠️ Error canceling old SL: {ce}")
+                # Don't return None here - the new SL is already placed
+                return new_sl
+        else:
+            logging.error("❌ Failed to place new SL, old SL not canceled.")
+            return None
+
+    except Exception as e:
+        logging.error(f"move_stop_loss() exception: {e}")
         return None
 
 def cancel_all_open_tps(symbol="BTCUSDT"):
@@ -770,6 +825,10 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
         tp2_hit = False
         sl_order_id = sl_order.get("orderId") or sl_order.get("order_id")
         remaining_qty = qty
+        
+        # Track if we need to replace SL
+        sl_needs_replacement = False
+        
         while True:
             time.sleep(5)
 
@@ -787,13 +846,48 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
             if tp3_filled:
                 remaining_qty = 0
 
-            # Check SL order
+            # Check SL order with enhanced status checking
             sl_filled = False
+            sl_expired = False
             sl_data = None
             if sl_order_id:
                 sl_data = get_order_status(symbol=symbol, order_id=sl_order_id, start_time=TRADE_TS)
-                if sl_data and sl_data.get("status") == "FILLED":
-                    sl_filled = True
+                if sl_data:
+                    status = sl_data.get("status")
+                    if status == "FILLED":
+                        sl_filled = True
+                    elif status in ["EXPIRED", "CANCELED", "REJECTED"]:
+                        sl_expired = True
+                        logging.warning(f"🔄 SL order {sl_order_id} has status: {status}. Needs replacement.")
+                        sl_needs_replacement = True
+
+            # --- Handle SL Replacement if Expired/Canceled ---
+            if sl_needs_replacement and remaining_qty > 0:
+                logging.warning("🔄 Stop Loss expired/canceled! Creating replacement SL...")
+                send_telegram(f"🔄 <b>Stop Loss Replacement</b>\nSymbol: {symbol}\nOld Order ID: {sl_order_id}\nReason: Order expired/canceled")
+                
+                # Determine current stop price - use original SL or recalculate based on current market
+                current_sl_price = sl  # Start with original SL
+                
+                # If TPs have been hit, adjust SL accordingly
+                if tp1_hit:
+                    current_sl_price = entry_price  # Break-even
+                    logging.info("🔄 Replacement SL set to break-even (TP1 hit)")
+                elif tp2_hit:
+                    current_sl_price = tp1  # TP1 level
+                    logging.info("🔄 Replacement SL set to TP1 level (TP2 hit)")
+                
+                # Place new SL order
+                new_sl_order = place_stop_loss(symbol, side, remaining_qty, current_sl_price, f"{TRADE_TS}_replacement")
+                if new_sl_order and ("orderId" in new_sl_order or "order_id" in new_sl_order):
+                    sl_order = new_sl_order
+                    sl_order_id = new_sl_order.get("orderId") or new_sl_order.get("order_id")
+                    logging.info(f"✅ Replacement SL placed successfully. New SL order ID: {sl_order_id}")
+                    send_telegram(f"✅ <b>Replacement SL Placed</b>\nSymbol: {symbol}\nNew Order ID: {sl_order_id}\nPrice: {current_sl_price:.2f}")
+                    sl_needs_replacement = False
+                else:
+                    logging.error("❌ Failed to place replacement SL! Retrying in next cycle...")
+                    # Don't reset sl_needs_replacement so we keep retrying
 
             # --- Stop Loss Triggered ---
             if sl_filled:
@@ -833,27 +927,42 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
             # --- TP1 reached → Move SL to Break-Even ---
             if tp1_filled and not tp1_hit:
                 logging.info("✅ TP1 hit → Move SL to break-even")
-                send_telegram(f"✅ <b>TP1 Hit</b>\nSymbol: {symbol}\nOrder ID: {sl_order_id}\nQty: {qty}\nSL moved to break-even.")
+                send_telegram(f"✅ <b>TP1 Hit</b>\nSymbol: {symbol}\nMoving SL to break-even.")
+                
                 if sl_order_id:
-                    new_sl = move_stop_loss(symbol, sl_order_id, side, remaining_qty, entry_price, TRADE_TS)
-                    if new_sl:
-                        sl_order = new_sl
-                        sl_order_id = new_sl.get("order_id") or new_sl.get("orderId")
-                        logging.info(f"✅ SL moved to break-even. New SL order ID: {sl_order_id}")
-                        send_telegram(f"🛡️ <b>SL Moved to Break-Even</b>\nSymbol: {symbol}\nNew SL Order ID: {sl_order_id}")
+                    # Use the actual remaining quantity from position, not calculated
+                    position, actual_remaining_qty = get_current_position(symbol)
+                    if position and actual_remaining_qty > 0:
+                        new_sl = move_stop_loss(symbol, sl_order_id, side, actual_remaining_qty, entry_price, TRADE_TS)
+                        if new_sl:
+                            sl_order = new_sl
+                            sl_order_id = new_sl.get("order_id") or new_sl.get("orderId")
+                            logging.info(f"✅ SL moved to break-even. New SL order ID: {sl_order_id}")
+                        else:
+                            logging.error("❌ Failed to move SL to break-even")
+                    else:
+                        logging.error("❌ Cannot move SL: No position found")
+                
                 tp1_hit = True
 
             # --- TP2 reached → Move SL to TP1 ---
             if tp2_filled and not tp2_hit:
                 logging.info("✅ TP2 hit → Move SL to TP1")
-                send_telegram(f"🏆 <b>TP2 Hit</b>\nSymbol: {symbol}\nOrder ID: {sl_order_id}\nQty: {qty}\nSL moved to TP1.")
+                send_telegram(f"🏆 <b>TP2 Hit</b>\nSymbol: {symbol}\nMoving SL to TP1.")
+                
                 if sl_order_id:
-                    new_sl = move_stop_loss(symbol, sl_order_id, side, remaining_qty, tp1, TRADE_TS)
-                    if new_sl:
-                        sl_order = new_sl
-                        sl_order_id = new_sl.get("order_id") or new_sl.get("orderId")
-                        logging.info(f"✅ SL moved to TP1. New SL order ID: {sl_order_id}")
-                        send_telegram(f"🛡️ <b>SL Moved to TP1</b>\nSymbol: {symbol}\nNew SL Order ID: {sl_order_id}")
+                    position, actual_remaining_qty = get_current_position(symbol)
+                    if position and actual_remaining_qty > 0:
+                        new_sl = move_stop_loss(symbol, sl_order_id, side, actual_remaining_qty, tp1, TRADE_TS)
+                        if new_sl:
+                            sl_order = new_sl
+                            sl_order_id = new_sl.get("order_id") or new_sl.get("orderId")
+                            logging.info(f"✅ SL moved to TP1. New SL order ID: {sl_order_id}")
+                        else:
+                            logging.error("❌ Failed to move SL to TP1")
+                    else:
+                        logging.error("❌ Cannot move SL: No position found")
+                
                 tp2_hit = True
 
             # --- TP3 reached → Close position and cancel SL ---
@@ -876,7 +985,7 @@ def execute_trade(symbol="BTCUSDT", qty=0.01):
     except Exception as e:
         logging.error(f"execute_trade() error: {e}")
         send_telegram(f"❌ <b>Trade Execution Error</b>\nSymbol: {symbol}\nError: {str(e)}")
-        
+                
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--loop", action="store_true", help="Enable continuous trade execution")
