@@ -9,6 +9,8 @@ import argparse
 # --- Telegram Alert Helper ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+EXCHANGER_ID=os.getenv("EXCHANGER_ID"),
+
 time_offset = 0
 from binance_sdk_derivatives_trading_usds_futures.derivatives_trading_usds_futures import (
     DerivativesTradingUsdsFutures,
