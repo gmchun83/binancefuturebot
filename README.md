@@ -1,4 +1,4 @@
-**🚀 Binance Futures Breakout Trading Bot**
+**🚀 Binance Futures Breakout Trading Bot v27**
 
 Automated TP/SL Management • Multi-R Take Profit System • Python 3.11+
 
