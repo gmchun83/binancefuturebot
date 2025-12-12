@@ -444,43 +444,55 @@ def close_open_position(symbol="BTCUSDT", side=None, ts=None):
 # ---------- SL / TPs ----------
 def place_stop_loss(symbol, side, qty, stop_price, ts):
     """
-    STOP_MARKET with safe validation buffer.
-    Returns dict-like data of the order.
+    Place a STOP_MARKET order for USDⓈ-M Futures with improved error handling.
     """
     try:
+        # Validate quantity
         if qty <= 0:
-            logging.error(f"Invalid qty for SL: {qty}")
+            logging.error(f"❌ Invalid quantity for SL: {qty}")
             return None
-
+            
         sl_side = "SELL" if side == "BUY" else "BUY"
 
-        # Mark price
         try:
-            r = requests.get(f"{BASE_URL}/fapi/v1/premiumIndex", params={"symbol": symbol}, timeout=5)
-            r.raise_for_status()
-            current_price = float(r.json().get("markPrice", 0))
+            response = requests.get(
+                f"{BASE_URL}/fapi/v1/premiumIndex",
+                params={"symbol": symbol},
+                timeout=5
+            )
+            response.raise_for_status()
+            data = response.json()
+            current_price = float(data.get("markPrice", 0))
         except Exception as e:
-            logging.error(f"markPrice fetch error: {e}")
+            logging.error(f"⚠️ Failed to fetch mark price: {e}")
             current_price = 0.0
 
-        buffer_pct = 0.002  # 0.2% buffer
-        buffer_amt = current_price * buffer_pct if current_price else 0
+        logging.info(f"📈 Current mark price for {symbol}: {current_price}")
 
-        if side == "BUY":
-            # SL must be BELOW current
-            if stop_price >= (current_price - buffer_amt):
-                stop_price = (current_price - buffer_amt) if current_price else stop_price
-        else:
-            # SL must be ABOVE current
-            if stop_price <= (current_price + buffer_amt):
-                stop_price = (current_price + buffer_amt) if current_price else stop_price
+        # Enhanced price validation with buffer
+        buffer_pct = 0.001  # 0.1% buffer
+        buffer_amount = current_price * buffer_pct
+        
+        if side == "BUY" and stop_price >= (current_price - buffer_amount):
+            logging.warning(f"⛔ Skipping SL placement: stop_price {stop_price} too close to current_price {current_price}")
+            # Adjust SL to be safely below current price
+            stop_price = current_price - buffer_amount
+            logging.info(f"🔄 Adjusted SL to: {stop_price:.2f}")
+            
+        if side == "SELL" and stop_price <= (current_price + buffer_amount):
+            logging.warning(f"⛔ Skipping SL placement: stop_price {stop_price} too close to current_price {current_price}")
+            # Adjust SL to be safely above current price
+            stop_price = current_price + buffer_amount
+            logging.info(f"🔄 Adjusted SL to: {stop_price:.2f}")
 
-        resp = client.rest_api.new_order(
+        # ✅ --- Safe to place stop order ---
+        # Use SDK with proper parameter formatting
+        response = client.rest_api.new_order(
             symbol=symbol,
             side=sl_side,
             type="STOP_MARKET",
-            stop_price=str(round(stop_price, 1)),
-            quantity=round(qty, 6),
+            stop_price=str(round(stop_price, 1)),  # Round to 1 decimal for price
+            quantity=round(qty, 3),  # Round to 3 decimals for BTC quantity
             close_position=False,
             reduce_only=True,
             working_type="CONTRACT_PRICE",
@@ -488,17 +500,77 @@ def place_stop_loss(symbol, side, qty, stop_price, ts):
             recv_window=10000,
             time_in_force="GTC"
         )
-        data = resp.data() if callable(getattr(resp,"data",None)) else resp
+
+        # Process response
+        data_method = getattr(response, "data", None)
+        data = data_method() if callable(data_method) else response
+        
+        # Convert to dict if needed
         if not isinstance(data, dict):
-            try:
+            if hasattr(data, "__dict__"):
+                data = data.__dict__
+            elif hasattr(data, "model_dump"):
                 data = data.model_dump()
-            except:
-                data = {"orderId": getattr(data, "orderId", None)}
-        logging.info(f"SL placed @ {stop_price} (clientOrderId={symbol}_SL_{ts})")
+            else:
+                # Try to convert to dict
+                try:
+                    data = dict(data)
+                except:
+                    data = {}
+        
+        logging.info(f"✅ Stop loss placed @ {stop_price}")
+        order_id = data.get("order_id") or data.get("orderId", "N/A")
+        send_telegram(f"🛑 <b>Stop Loss Placed</b>\n"
+              f"Symbol: {symbol}\n"
+              f"Client Order ID: {symbol}_SL_{ts}\n"
+              f"Price: {stop_price}\n"
+              f"Qty: {qty}\n"
+              f"Order ID: {order_id}")
+
         return data
+
     except Exception as e:
-        logging.error(f"place_stop_loss error: {e}")
-        return None
+        logging.error(f"place_stop_loss() exception: {e}")
+        
+        # Add fallback to direct API if SDK fails
+        try:
+            logging.warning("Trying direct API fallback for stop loss...")
+            api_key = os.getenv("API_KEY")
+            api_secret = os.getenv("API_SECRET")
+            
+            params = {
+                "symbol": symbol,
+                "side": sl_side,
+                "type": "STOP_MARKET",
+                "quantity": round(qty, 3),
+                "stopPrice": str(round(stop_price, 1)),
+                "reduceOnly": "true",
+                "workingType": "CONTRACT_PRICE",
+                "newClientOrderId": f"{symbol}_SL_{ts}",
+                "recvWindow": 10000,
+                "timeInForce": "GTC",
+                "timestamp": int(time.time() * 1000)
+            }
+            
+            query_string = urllib.parse.urlencode(params)
+            signature = hmac.new(
+                api_secret.encode(), query_string.encode(), hashlib.sha256
+            ).hexdigest()
+            params["signature"] = signature
+            
+            url = f"{BASE_URL}/fapi/v1/order"
+            headers = {"X-MBX-APIKEY": api_key}
+            response = requests.post(url, headers=headers, data=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            logging.info(f"✅ Stop loss placed via direct API @ {stop_price}")
+            return data
+            
+        except Exception as api_error:
+            logging.error(f"Direct API fallback also failed: {api_error}")
+            send_telegram(f"❌ <b>Stop Loss Failed</b>\nBoth SDK and direct API failed\nError: {str(e)[:100]}")
+            return None
 
 # Update the fetch_symbol_filters function to get precision info
 def fetch_symbol_filters(symbol: str):
@@ -667,53 +739,162 @@ def position_is_closed(symbol):
         logging.error(f"position_is_closed error: {e}")
         return False  # Do NOT assume closed on error
 
-def move_stop_loss(symbol, side, qty, new_stop_price, ts):
+# Replace the existing move_stop_loss function with this working version:
+def move_stop_loss(symbol, old_order_id, side, qty, new_stop_price, ts):
     """
-    Place a fresh SL at new price, then cancel old ones with cancel_all_open_orders.
-    Simple + robust implementation.
+    Move stop-loss with enhanced fallback mechanisms
     """
     try:
-        new_sl = place_stop_loss(symbol, side, qty, new_stop_price, ts)
-        if not new_sl:
-            logging.error("Failed to place replacement SL.")
+        # Validate quantity first
+        if qty <= 0:
+            logging.error(f"❌ Cannot move SL: Invalid quantity: {qty}")
             return None
-        # We rely on reduce_only to avoid adding risk; best-effort cancel old:
+
+        # Always try to get current position first for safety
+        position, pos_amt, _ = get_current_position(symbol, max_retries=3)
+        
+        # If API returns a valid position, use that quantity instead
+        if position and abs(pos_amt) > 0.0001:
+            actual_qty = abs(pos_amt)
+            logging.info(f"🔄 Using API position quantity: {actual_qty} (instead of passed: {qty})")
+            qty = actual_qty
+        else:
+            logging.warning(f"⚠️ No valid position from API, using passed quantity: {qty}")
+
+        # Keep using /fapi/v1/premiumIndex for mark price
         try:
-            cancel_all_open_tps(symbol)  # optional: clear stale TPs if needed before re-post
+            response = requests.get(
+                f"{BASE_URL}/fapi/v1/premiumIndex",
+                params={"symbol": symbol},
+                timeout=5
+            )
+            response.raise_for_status()
+            current_price = float(response.json().get("markPrice", 0))
+            logging.info(f"📈 Current mark price for {symbol}: {current_price}")
         except Exception as e:
-            logging.warning(f"Cancel TPs after SL move warning: {e}")
-        return new_sl
+            logging.error(f"⚠️ Failed to fetch mark price: {e}")
+            current_price = 0.0
+
+        # Enhanced validation with proper side logic
+        buffer_pct = 0.002  # 0.2% buffer
+        buffer_amount = current_price * buffer_pct
+        
+        # FIXED: Correct SL validation logic for SELL positions
+        if side == "BUY":  # Long position
+            if new_stop_price >= (current_price - buffer_amount):
+                logging.warning(f"⛔ Invalid SL (BUY): {new_stop_price} ≥ mark {current_price} (with buffer)")
+                adjusted_sl = current_price - buffer_amount
+                logging.info(f"🔄 Adjusting SL to: {adjusted_sl:.2f}")
+                new_stop_price = adjusted_sl
+        else:  # SELL position (Short)
+            if new_stop_price <= (current_price + buffer_amount):
+                logging.warning(f"⛔ Invalid SL (SELL): {new_stop_price} ≤ mark {current_price} (with buffer)")
+                adjusted_sl = current_price + buffer_amount
+                logging.info(f"🔄 Adjusting SL to: {adjusted_sl:.2f}")
+                new_stop_price = adjusted_sl
+
+        # Generate unique client order ID using current timestamp
+        unique_ts = now_ms()
+        new_client_order_id = f"{symbol}_SL_{unique_ts}_replacement"
+
+        # Place new stop-loss first
+        new_sl = place_stop_loss(symbol, side, qty, new_stop_price, unique_ts)
+        
+        if new_sl:
+            logging.info("✅ New SL placed successfully. Now canceling old SL.")
+            try:
+                # Cancel old SL order
+                cancel_response = client.rest_api.cancel_order(
+                    symbol=symbol, 
+                    order_id=old_order_id
+                )
+                logging.info(f"✅ Old SL order {old_order_id} canceled.")
+                
+                # Get new SL order ID for tracking
+                new_sl_order_id = new_sl.get("orderId") or new_sl.get("order_id")
+                
+                # Send Telegram notification
+                send_telegram(
+                    f"🛡️ <b>Stop Loss Moved</b>\n"
+                    f"Symbol: {symbol}\n"
+                    f"From Order: {old_order_id}\n"
+                    f"To New SL: {new_stop_price:.2f}\n"
+                    f"New Order ID: {new_sl_order_id}\n"
+                    f"Position: {qty}\n"
+                    f"Reason: TP hit"
+                )
+                
+                return new_sl
+            except Exception as ce:
+                logging.error(f"⚠️ Error canceling old SL: {ce}")
+                # Don't return None here - the new SL is already placed
+                send_telegram(f"⚠️ <b>SL Move Warning</b>\n"
+                          f"Symbol: {symbol}\n"
+                          f"New SL placed but failed to cancel old SL: {ce}")
+                return new_sl
+        else:
+            logging.error("❌ Failed to place new SL, old SL not canceled.")
+            send_telegram(f"❌ <b>SL Move Failed</b>\n"
+                      f"Symbol: {symbol}\n"
+                      f"Failed to place new stop loss")
+            return None
+
     except Exception as e:
-        logging.error(f"move_stop_loss error: {e}")
+        logging.error(f"move_stop_loss() exception: {e}")
+        send_telegram(f"❌ <b>SL Move Error</b>\n"
+                  f"Symbol: {symbol}\n"
+                  f"Error: {e}")
         return None
 
+
+
+# Also, update the convert_runner_to_trailing function to handle closing position when TP3 is hit:
 def convert_runner_to_trailing(symbol, side, qty_runner, activation_price, ts, callback_rate_pct=1.0):
+    """
+    Convert remaining position to trailing stop.
+    Note: TRAILING_STOP_MARKET might not be available on testnet.
+    For testnet, we'll use a standard STOP_MARKET instead.
+    """
     try:
-        if qty_runner <= 0: return None
+        if qty_runner <= 0: 
+            logging.info("No remaining position to convert to trailing stop")
+            return None
+        
         opposite = "SELL" if side == "BUY" else "BUY"
-        r = client.rest_api.new_order(
+        
+        # For testnet, use STOP_MARKET instead of TRAILING_STOP_MARKET
+        logging.warning("⚠️ TRAILING_STOP_MARKET not available on testnet, using STOP_MARKET instead")
+        
+        # Place a regular stop at activation price
+        response = client.rest_api.new_order(
             symbol=symbol,
             side=opposite,
-            type="TRAILING_STOP_MARKET",
-            quantity=qty_runner,
+            type="STOP_MARKET",
+            quantity=round(qty_runner, 3),
+            stop_price=str(round(activation_price, 1)),
             reduce_only=True,
-            activation_price=str(round(activation_price, 2)),
-            callback_rate=str(callback_rate_pct),
             working_type="CONTRACT_PRICE",
             new_client_order_id=f"{symbol}_TRAIL_{ts}",
-            recv_window=10000
+            recv_window=10000,
+            time_in_force="GTC"
         )
-        d = r.data() if callable(getattr(r,"data",None)) else r
-        logging.info("Trailing stop activated.")
-        return d
+        
+        if callable(getattr(response, "data", None)):
+            data = response.data()
+        else:
+            data = response
+            
+        logging.info(f"✅ Trailing stop (simulated) @ {activation_price}")
+        return data
+        
     except Exception as e:
         logging.error(f"convert_runner_to_trailing error: {e}")
         return None
 
-def monitor_trade(symbol, side, sl_client_id, tp1_cid, tp2_cid, tp3_cid, ts, entry_price, R, tp1_price, tp2_price, tick):
+# Now update the monitor_trade function to properly handle TP1, TP2, and TP3:
+def monitor_trade(symbol, side, sl_client_id, tp1_cid, tp2_cid, tp3_cid, ts, entry_price, R, tp1_price, tp2_price, tick, price_precision):
     """
     Cleanly exits when SL or any end condition occurs.
-    Also tightens SL on TP1/TP2 and converts last runner to trailing.
     """
     logging.info("📡 Monitoring trade state...")
     tp1_hit = False
@@ -723,8 +904,8 @@ def monitor_trade(symbol, side, sl_client_id, tp1_cid, tp2_cid, tp3_cid, ts, ent
     while True:
         time.sleep(3)
 
-        # ---- STOP-LOSS STATUS (by clientOrderId we created) ----
-        sl_data = get_order_status(symbol=symbol, client_order_id=sl_client_id, start_time=ts)
+        # ---- STOP-LOSS STATUS (using standard order API for testnet) ----
+        sl_data = get_order_status(symbol=symbol, client_order_id=sl_client_id)
         if sl_data:
             sl_status = sl_data.get("status", "")
             if sl_status in ["FILLED"]:
@@ -749,30 +930,78 @@ def monitor_trade(symbol, side, sl_client_id, tp1_cid, tp2_cid, tp3_cid, ts, ent
         if not tp1_hit and check_tp_filled_with_retry(symbol, tp1_cid, start_time=ts):
             tp1_hit = True
             logging.info("🎯 TP1 hit — move SL to BE+0.2R")
+            
+            # Calculate new stop loss: breakeven + 0.2R
             be_plus = entry_price + (0.2 * R if side == "BUY" else -0.2 * R)
-            new_sl = round_price(be_plus, tick, 1)  # Fixed: added price_precision parameter
-            _, pos_amt = get_current_position(symbol)
-            move_stop_loss(symbol, side, abs(pos_amt), new_sl, now_ms())
+            position, pos_amt, _ = get_current_position(symbol)
+            
+            if position and abs(float(pos_amt)) > 0:
+                # Get the current stop loss order ID
+                current_sl_data = get_order_status(symbol=symbol, client_order_id=sl_client_id)
+                old_order_id = current_sl_data.get("orderId") if current_sl_data else None
+                
+                if old_order_id:
+                    # Move stop loss
+                    move_stop_loss(symbol, old_order_id, side, abs(float(pos_amt)), be_plus, now_ms())
+                else:
+                    logging.error("❌ Could not get old SL order ID to move")
+            else:
+                logging.error("❌ No valid position found after TP1 hit")
 
         # ---- TP2 ----
         if not tp2_hit and check_tp_filled_with_retry(symbol, tp2_cid, start_time=ts):
             tp2_hit = True
             logging.info("🎯 TP2 hit — move SL to TP1 and convert runner to trailing")
-            _, pos_amt = get_current_position(symbol)
-            move_stop_loss(symbol, side, abs(pos_amt), tp1_price, now_ms())
-            convert_runner_to_trailing(symbol, side, abs(pos_amt), activation_price=tp2_price, ts=now_ms(), callback_rate_pct=1.0)
+            
+            position, pos_amt, _ = get_current_position(symbol)
+            
+            if position and abs(float(pos_amt)) > 0:
+                # Get the current stop loss order ID
+                current_sl_data = get_order_status(symbol=symbol, client_order_id=sl_client_id)
+                old_order_id = current_sl_data.get("orderId") if current_sl_data else None
+                
+                if old_order_id:
+                    # Move stop loss to TP1 price
+                    move_stop_loss(symbol, old_order_id, side, abs(float(pos_amt)), tp1_price, now_ms())
+                    
+                    # For testnet, skip trailing stop and just use regular stop
+                    # (You can uncomment the line below if you want to use trailing stop simulation)
+                    # convert_runner_to_trailing(symbol, side, abs(float(pos_amt)), tp1_price, now_ms())
+                    
+                    logging.info("⚠️ Skipping trailing stop on testnet, using regular stop at TP1 price")
+                else:
+                    logging.error("❌ Could not get old SL order ID to move")
+            else:
+                logging.error("❌ No valid position found after TP2 hit")
 
         # ---- TP3 ----
         if not tp3_hit and check_tp_filled_with_retry(symbol, tp3_cid, start_time=ts):
             tp3_hit = True
-            logging.info("🏆 TP3 hit — finalize")
+            logging.info("🏆 TP3 hit — closing all remaining position")
+            
+            # Cancel any open orders (including stop loss)
+            cancel_all_open_tps(symbol)
+            
+            # Close any remaining position
+            position, pos_amt, _ = get_current_position(symbol)
+            if position and abs(float(pos_amt)) > 0:
+                logging.info(f"Closing remaining position: {pos_amt}")
+                close_open_position(symbol, side, now_ms())
+            
             return "TP3"
 
         # ---- Optional: if all three, exit ----
         if tp1_hit and tp2_hit and tp3_hit:
             logging.info("🏁 All TPs done — exiting monitor")
             return "ALL_TP"
-
+            
+        # ---- Additional exit condition: if position is 0 and TP3 not hit yet ----
+        # This handles cases where TP1 and TP2 were filled but position is already 0
+        position, pos_amt, _ = get_current_position(symbol)
+        if abs(float(pos_amt)) == 0 and (tp1_hit or tp2_hit):
+            logging.info("📌 Position already at 0 — exiting monitor")
+            cancel_all_open_tps(symbol)
+            return "POSITION_CLOSED"
 # ---------- EXECUTE ----------
 # ---------- ENTRY ORDER VALIDATION ----------
 def place_entry_order(symbol, side, qty, ts):
@@ -936,7 +1165,7 @@ def wait_for_position_update(symbol, expected_qty, max_attempts=10, wait_seconds
             position, pos_amt, entry_price = get_current_position(symbol)  # Already correct
             if position and abs(float(pos_amt)) >= expected_qty * 0.9:  # Allow 10% tolerance
                 logging.info(f"✅ Position confirmed: {pos_amt} at {entry_price}")
-                return True, float(pos_amt), entry_price
+                return True, abs(float(pos_amt)), entry_price
             else:
                 logging.info(f"⏳ Waiting for position update... attempt {attempt + 1}")
                 time.sleep(wait_seconds)
@@ -1055,13 +1284,15 @@ def execute_trade(symbol="BTCUSDT", risk_usdt=5.0, leverage=20):
         return
     
     # Use actual values from position
-    if actual_qty > 0 and actual_entry_price > 0:
-        filled_qty = actual_qty
+    # Use actual values from position (allow negative for SELL positions)
+    if abs(actual_qty) > 0 and actual_entry_price > 0:
+        # For SELL positions, actual_qty is negative, but we need positive for calculations
+        filled_qty = abs(actual_qty)  # Use absolute value for quantity calculations
         entry_price = actual_entry_price
-        logging.info(f"✅ Position verified: {filled_qty} at {entry_price}")
+        logging.info(f"✅ Position verified: {filled_qty} (abs) at {entry_price}")
     else:
-        logging.error("❌ Invalid position data")
-        send_telegram("❌ <b>Invalid Position Data</b>")
+        logging.error(f"❌ Invalid position data: qty={actual_qty}, price={actual_entry_price}")
+        send_telegram(f"❌ <b>Invalid Position Data</b>\nQty: {actual_qty}\nPrice: {actual_entry_price}")
         cancel_all_open_tps(symbol)
         return
 
@@ -1101,7 +1332,8 @@ def execute_trade(symbol="BTCUSDT", risk_usdt=5.0, leverage=20):
     
     result = monitor_trade(
         symbol, side, sl_cid, tp1_cid, tp2_cid, tp3_cid, ts,
-        entry_price=entry_price, R=R, tp1_price=tp1, tp2_price=tp2, tick=tick
+        entry_price=entry_price, R=R, tp1_price=tp1, tp2_price=tp2, 
+        tick=tick, price_precision=price_precision  # Add price_precision
     )
 
     logging.info(f"🔚 Trade finished: {result}")
